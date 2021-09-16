@@ -1,5 +1,5 @@
 [package]
-name = "hello-rocket"
+name = "bitcoin-aba"
 version = "0.1.0"
 edition = "2018"
 
@@ -8,3 +8,6 @@ edition = "2018"
 [dependencies]
 rocket = { version = "0.5.0-rc.1", features = ["json", "uuid"] }
 uuid = { version = "0.8.2", features = ["v4"] }
+
+log = "^0.4"
+rusqlite = { version = "0.25.3" }
