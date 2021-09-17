@@ -1,20 +1,23 @@
 #[macro_use]
 extern crate rocket;
 
-use rocket::serde::{json::Json, Deserialize, Serialize};
-use rocket::serde::uuid::Uuid;
+use rocket::serde::{json::serde_json, json::Json, Deserialize, Serialize};
 use rocket::response::Responder;
-use rocket::{Request, response};
-use crate::CommandError::NotFound;
+use rocket::{Request, response, State};
+use crate::CommandError::ServerError;
 use std::sync::Mutex;
 use rusqlite::{named_params, Connection};
+use rusty_ulid::Ulid;
+
+type AccountId = Ulid;
 
 static MIGRATIONS: &[&str] = &[
     "CREATE TABLE version (version INTEGER)",
     "INSERT INTO version VALUES (1)",
-    // "CREATE TABLE script_pubkeys (keychain TEXT, child INTEGER, script BLOB);",
-    // "CREATE INDEX idx_keychain_child ON script_pubkeys(keychain, child);",
-    // "CREATE INDEX idx_script ON script_pubkeys(script);",
+    "CREATE TABLE command (seq INTEGER PRIMARY KEY AUTOINCREMENT, version INTEGER NOT NULL, command TEXT NOT NULL);",
+    "CREATE INDEX idx_command_seq ON command(seq);",
+    "CREATE TABLE account (id TEXT UNIQUE NOT NULL, number INTEGER NOT NULL, description TEXT NOT NULL, type TEXT NOT NULL, parent_id TEXT, statement TEXT);",
+    "CREATE INDEX idx_account_id ON account(id);",
     // "CREATE TABLE utxos (value INTEGER, keychain TEXT, vout INTEGER, txid BLOB, script BLOB);",
     // "CREATE INDEX idx_txid_vout ON utxos(txid, vout);",
     // "CREATE TABLE transactions (txid BLOB, raw_tx BLOB);",
@@ -28,18 +31,6 @@ static MIGRATIONS: &[&str] = &[
 ];
 
 type DbConn = Mutex<Connection>;
-
-// fn init_database(conn: &Connection) {
-//     conn.execute("CREATE TABLE entries (
-//                   id              INTEGER PRIMARY KEY,
-//                   name            TEXT NOT NULL
-//                   )", &[])
-//         .expect("create entries table");
-//
-//     conn.execute("INSERT INTO entries (id, name) VALUES ($1, $2)",
-//                  &[&0, &"Rocketeer"])
-//         .expect("insert single entry into entries table");
-// }
 
 pub enum Error {
     Rusqlite(rusqlite::Error)
@@ -88,6 +79,17 @@ pub fn set_schema_version(conn: &Connection, version: i32) -> rusqlite::Result<u
     )
 }
 
+/// Insert command
+pub fn insert_command(connection: &Connection, version: i64, command: &Command) -> Result<i64, CommandError> {
+    let mut statement = connection.prepare_cached("INSERT INTO command (version, command) VALUES (:version, :command)")?;
+    statement.execute(named_params! {
+            ":version": version,
+            ":command": serde_json::to_string(&command)?,
+        })?;
+
+    Ok(connection.last_insert_rowid())
+}
+
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let version = get_schema_version(conn)?;
     let stmts = &MIGRATIONS[(version as usize)..];
@@ -99,7 +101,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
 
     for stmt in stmts {
-        println!("conn.execute({}", &stmt);
+        println!("conn.execute: {}", &stmt);
         let res = conn.execute(stmt, []);
         if res.is_err() {
             println!("migration failed on:\n{}\n{:?}", stmt, res);
@@ -116,7 +118,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 #[serde(crate = "rocket::serde")]
-enum FinancialStatement {
+pub enum FinancialStatement {
     BalanceSheet,
     IncomeStatement,
 }
@@ -127,100 +129,106 @@ enum FinancialStatement {
 /// *organization -> *category -> *subaccount -> *organization -> *subaccount
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 #[serde(crate = "rocket::serde")]
-enum AccountType {
+pub enum AccountType {
     Organization {
-        parent_account: Option<u64>,
+        parent_id: Option<AccountId>,
     },
     OrganizationUnit {
-        parent_account: u64,
+        parent_id: AccountId,
     },
     Category {
         statement: FinancialStatement,
-        parent_account: u64,
+        parent_id: AccountId,
     },
     SubAccount {
-        parent_account: u64,
+        parent_id: AccountId,
     },
 }
 
 // Commands
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(crate = "rocket::serde")]
-enum Command<'r> {
+pub enum Command<'r> {
     AddAccount {
-        number: u64,
-        description: &'r str,
-        account_type: AccountType,
+        #[serde(borrow = "'r")]
+        account: Account<'r>
     }
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(crate = "rocket::serde")]
-struct Account<'r> {
-    uuid: Uuid,
+pub struct Account<'r> {
+    id: AccountId,
     number: u64,
     description: &'r str,
     account_type: AccountType,
 }
 
-#[derive(Serialize, Debug)]
-#[serde(crate = "rocket::serde")]
-struct ResourceUuid {
-    uuid: Uuid,
+#[derive(Responder)]
+pub enum CommandResponse {
+    #[response(status = 201, content_type = "text")]
+    CreatedAccount(String)
 }
 
-impl<'r> Responder<'r, 'static> for ResourceUuid {
-    fn respond_to(self, req: &'r Request<'_>) -> response::Result<'static> {
-        Json(self).respond_to(req)
+#[derive(Responder)]
+pub enum CommandError {
+    #[response(status = 500)]
+    ServerError(String),
+//    #[response(status = 404)]
+//    NotFound(String),
+}
+
+impl From<serde_json::Error> for CommandError {
+    fn from(json_error: serde_json::Error) -> Self {
+        CommandError::ServerError(json_error.to_string())
     }
 }
 
-#[derive(Responder)]
-enum CommandResponse {
-    #[response(status = 201, content_type = "json")]
-    Created(ResourceUuid)
+impl From<rusqlite::Error> for CommandError {
+    fn from(rusqlite_error: rusqlite::Error) -> Self {
+        CommandError::ServerError(rusqlite_error.to_string())
+    }
 }
 
-#[derive(Responder)]
-enum CommandError<'r> {
-    #[response(status = 500)]
-    Server(&'r str),
-    #[response(status = 404)]
-    NotFound(&'r str),
+impl From<&std::sync::TryLockError<std::sync::MutexGuard<'_, rusqlite::Connection>>> for CommandError {
+    fn from(try_lock_error: &std::sync::TryLockError<std::sync::MutexGuard<'_, rusqlite::Connection>>) -> Self {
+        CommandError::ServerError(try_lock_error.to_string())
+    }
 }
+
+#[get("/ulid")]
+fn get_ulid() -> String {
+    rusty_ulid::generate_ulid_string()
+}
+
+//#[get("/accounts")]
+//fn get_accounts() -> Vec<Account<'static>> {
+//    todo!()
+//}
 
 #[post("/commands", data = "<command>")]
-fn post_command(command: Json<Command<'_>>) -> Result<CommandResponse, CommandError> {
+fn post_command(connection: &State<Mutex<Connection>>, command: Json<Command>) -> Result<CommandResponse, CommandError> {
+    
+    insert_command(connection.try_lock().as_ref()?, 0, &command.0)?;
+    
     match command.0 {
-        Command::AddAccount { number, description, account_type } => {
-            let account = Account {
-                uuid: Uuid::new_v4(),
-                number,
-                description,
-                account_type,
-            };
-
-            println!("add account: {:?}", account);
-            Ok(CommandResponse::Created(ResourceUuid { uuid: account.uuid }))
+        Command::AddAccount { account } => {
+            debug!("add account: {:?}", account);
+            Ok(CommandResponse::CreatedAccount(account.id.to_string()))
         }
     }
-}
-
-#[get("/")]
-fn index() -> &'static str {
-    "Hello, world!"
 }
 
 #[launch]
 fn rocket() -> _ {
     // Open a new in-memory SQLite database.
-    let conn = Connection::open("test_db").expect("open test_db");
+    let conn = Connection::open("test.sqlite").expect("open test_db");
 
     // Initialize the `entries` table in the in-memory database.
     migrate(&conn);
 
     rocket::build()
         .manage(Mutex::new(conn))
-        .mount("/", routes![index])
+        .mount("/", routes![get_ulid])
         .mount("/", routes![post_command])
 }
