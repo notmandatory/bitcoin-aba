@@ -1,13 +1,19 @@
 #[macro_use]
 extern crate rocket;
 
-use rocket::serde::{json::serde_json, json::Json, Deserialize, Serialize};
-use rocket::response::Responder;
-use rocket::{Request, response, State};
-use crate::CommandError::ServerError;
 use std::sync::Mutex;
+
+use rocket::response::Responder;
+use rocket::serde::{json::serde_json, json::Json, Deserialize, Serialize};
+use rocket::{response, Request, State};
 use rusqlite::{named_params, Connection};
 use rusty_ulid::Ulid;
+use rusqlite::ToSql;
+
+use crate::CommandError::ServerError;
+use std::fmt;
+use std::str::FromStr;
+use rusqlite::types::Null;
 
 type AccountId = Ulid;
 
@@ -33,7 +39,7 @@ static MIGRATIONS: &[&str] = &[
 type DbConn = Mutex<Connection>;
 
 pub enum Error {
-    Rusqlite(rusqlite::Error)
+    Rusqlite(rusqlite::Error),
 }
 
 impl std::convert::From<rusqlite::Error> for Error {
@@ -80,14 +86,70 @@ pub fn set_schema_version(conn: &Connection, version: i32) -> rusqlite::Result<u
 }
 
 /// Insert command
-pub fn insert_command(connection: &Connection, version: i64, command: &Command) -> Result<i64, CommandError> {
-    let mut statement = connection.prepare_cached("INSERT INTO command (version, command) VALUES (:version, :command)")?;
+pub fn insert_command(
+    connection: &Connection,
+    version: i64,
+    command: &Command,
+) -> Result<i64, CommandError> {
+    let mut statement = connection
+        .prepare_cached("INSERT INTO command (version, command) VALUES (:version, :command)")?;
     statement.execute(named_params! {
-            ":version": version,
-            ":command": serde_json::to_string(&command)?,
-        })?;
+        ":version": version,
+        ":command": serde_json::to_string(&command)?,
+    })?;
 
     Ok(connection.last_insert_rowid())
+}
+
+/// Insert command
+pub fn insert_account(connection: &Connection, account: &Account) -> Result<String, CommandError> {
+    let mut sql_statement = connection.prepare_cached("INSERT INTO account (id, number, description, type, parent_id, statement) VALUES (:id, :number, :description, :type, :parent_id, :statement)")?;
+    match account.account_type {
+        AccountType::Organization { parent_id } => {
+            sql_statement.execute(named_params! {
+                ":id": account.id.to_string(),
+                ":number": account.number,
+                ":description": account.description,
+                ":type": account.account_type.to_string(),
+                ":parent_id": parent_id.map(|ulid| ulid.to_string()).to_sql()?,
+                ":statement": Null,
+            })?;
+        }
+        AccountType::OrganizationUnit { parent_id } => {
+            sql_statement.execute(named_params! {
+                ":id": account.id.to_string(),
+                ":number": account.number,
+                ":description": account.description,
+                ":type": account.account_type.to_string(),
+                ":parent_id": parent_id.to_string(),
+                ":statement": Null,
+            })?;
+        }
+        AccountType::Category {
+            parent_id,
+            statement,
+        } => {
+            sql_statement.execute(named_params! {
+                ":id": account.id.to_string(),
+                ":number": account.number,
+                ":description": account.description,
+                ":type": account.account_type.to_string(),
+                ":parent_id": parent_id.to_string(),
+                ":statement": statement.to_string(),
+            })?;
+        }
+        AccountType::SubAccount { parent_id } => {
+            sql_statement.execute(named_params! {
+                ":id": account.id.to_string(),
+                ":number": account.number,
+                ":description": account.description,
+                ":type": account.account_type.to_string(),
+                ":parent_id": parent_id.to_string(),
+                ":statement": Null,
+            })?;
+        }
+    }
+    Ok(account.id.to_string())
 }
 
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -123,6 +185,27 @@ pub enum FinancialStatement {
     IncomeStatement,
 }
 
+impl fmt::Display for FinancialStatement {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match *self {
+            FinancialStatement::BalanceSheet => "BalanceSheet",
+            FinancialStatement::IncomeStatement => "IncomeStatement",
+        })
+    }
+}
+
+impl FromStr for FinancialStatement {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "BalanceSheet" => Ok(FinancialStatement::BalanceSheet),
+            "IncomeStatement" => Ok(FinancialStatement::IncomeStatement),
+            _ => Err(()),
+        }
+    }
+}
+
 /// *organization -> *category -> *subaccount
 /// *organization -> *organizationunit -> *category -> *subaccount
 /// *organization -> *category -> *organizationunit -> *subaccount
@@ -137,22 +220,34 @@ pub enum AccountType {
         parent_id: AccountId,
     },
     Category {
-        statement: FinancialStatement,
         parent_id: AccountId,
+        statement: FinancialStatement,
     },
     SubAccount {
         parent_id: AccountId,
     },
 }
 
+impl fmt::Display for AccountType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match *self {
+            AccountType::Organization { .. } => "Organization",
+            AccountType::OrganizationUnit { .. } => "OrganizationUnit",
+            AccountType::Category { .. } => "Category",
+            AccountType::SubAccount { .. } => "SubAccount",
+        })
+    }
+}
+
+// TODO add command ULID and version?
 // Commands
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(crate = "rocket::serde")]
 pub enum Command<'r> {
     AddAccount {
         #[serde(borrow = "'r")]
-        account: Account<'r>
-    }
+        account: Account<'r>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -167,15 +262,15 @@ pub struct Account<'r> {
 #[derive(Responder)]
 pub enum CommandResponse {
     #[response(status = 201, content_type = "text")]
-    CreatedAccount(String)
+    CreatedAccount(String),
 }
 
 #[derive(Responder)]
 pub enum CommandError {
     #[response(status = 500)]
     ServerError(String),
-//    #[response(status = 404)]
-//    NotFound(String),
+    //    #[response(status = 404)]
+    //    NotFound(String),
 }
 
 impl From<serde_json::Error> for CommandError {
@@ -190,8 +285,12 @@ impl From<rusqlite::Error> for CommandError {
     }
 }
 
-impl From<&std::sync::TryLockError<std::sync::MutexGuard<'_, rusqlite::Connection>>> for CommandError {
-    fn from(try_lock_error: &std::sync::TryLockError<std::sync::MutexGuard<'_, rusqlite::Connection>>) -> Self {
+impl From<&std::sync::TryLockError<std::sync::MutexGuard<'_, rusqlite::Connection>>>
+    for CommandError
+{
+    fn from(
+        try_lock_error: &std::sync::TryLockError<std::sync::MutexGuard<'_, rusqlite::Connection>>,
+    ) -> Self {
         CommandError::ServerError(try_lock_error.to_string())
     }
 }
@@ -207,13 +306,16 @@ fn get_ulid() -> String {
 //}
 
 #[post("/commands", data = "<command>")]
-fn post_command(connection: &State<Mutex<Connection>>, command: Json<Command>) -> Result<CommandResponse, CommandError> {
-    
+fn post_command(
+    connection: &State<Mutex<Connection>>,
+    command: Json<Command>,
+) -> Result<CommandResponse, CommandError> {
     insert_command(connection.try_lock().as_ref()?, 0, &command.0)?;
-    
+
     match command.0 {
         Command::AddAccount { account } => {
-            debug!("add account: {:?}", account);
+            debug!("add account: {:?}", &account);
+            insert_account(connection.try_lock().as_ref()?, &account);
             Ok(CommandResponse::CreatedAccount(account.id.to_string()))
         }
     }
