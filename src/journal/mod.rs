@@ -16,27 +16,50 @@ pub struct Journal {
 }
 
 impl Journal {
-    pub fn new() -> Journal {
-        let db = Db::new().expect("journal db");
-        Journal { db }
+    pub fn new() -> Result<Journal, Error> {
+        let db = Db::new()?;
+        Ok(Journal { db })
+    }
+
+    pub fn new_mem() -> Result<Journal, Error> {
+        let db = Db::new_mem()?;
+        Ok(Journal { db })
     }
 
     pub fn add(&self, entry: JournalEntry) -> Result<(), Error> {
         // TODO do validations
         self.db.insert_entry(entry)
     }
+
+    pub fn view(&self) -> Result<Vec<JournalEntry>, Error> {
+        self.db.select_entries()
+    }
 }
 
 /// Journal Entry
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct JournalEntry {
     pub id: JournalEntryId,
     pub version: ApiVersion,
     pub action: Action,
 }
 
+impl JournalEntry {
+    const DEFAULT_VERSION: ApiVersion = 1;
+
+    fn new(action: Action) -> JournalEntry {
+        let id = Ulid::generate();
+        let version = JournalEntry::DEFAULT_VERSION;
+        JournalEntry {
+            id,
+            version,
+            action,
+        }
+    }
+}
+
 /// Journal Entry Action
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum Action {
     AddAccount { account: Account },
 }
@@ -48,7 +71,7 @@ type AccountId = Ulid;
 // *organization -> *category -> *organizationunit -> *subaccount
 // *organization -> *category -> *subaccount -> *organization -> *subaccount
 /// AccountType
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum AccountType {
     Organization {
         parent_id: Option<AccountId>,
@@ -77,12 +100,24 @@ impl fmt::Display for AccountType {
 }
 
 /// Account
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Account {
     pub id: AccountId,
     pub number: u64,
     pub description: String,
     pub account_type: AccountType,
+}
+
+impl Account {
+    fn new(number: u64, description: String, account_type: AccountType) -> Account {
+        let id = Ulid::generate();
+        Account {
+            id,
+            number,
+            description,
+            account_type,
+        }
+    }
 }
 
 ///// List accounts
@@ -97,7 +132,7 @@ pub struct Account {
 //}
 
 /// Financial Statement
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq)]
 pub enum FinancialStatement {
     BalanceSheet,
     IncomeStatement,
@@ -121,5 +156,27 @@ impl FromStr for FinancialStatement {
             "IncomeStatement" => Ok(FinancialStatement::IncomeStatement),
             _ => Err(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::journal::{Account, AccountType, Action, Journal, JournalEntry};
+
+    #[test]
+    fn test_add_find() {
+        let journal = Journal::new_mem().expect("journal");
+
+        let entry = JournalEntry::new(Action::AddAccount {
+            account: Account::new(
+                100,
+                "Test account".to_string(),
+                AccountType::Organization { parent_id: None },
+            ),
+        });
+        journal.add(entry.clone()).unwrap();
+        let entries = journal.view().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.get(0).unwrap(), &entry);
     }
 }

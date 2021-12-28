@@ -9,10 +9,12 @@ mod journal;
 
 type ApiVersion = u16;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Error {
-    Rusqlite(rusqlite::Error),
-    R2d2(r2d2::Error),
+    Rusqlite(String),
+    R2d2(String),
+    SerdeJson(String),
+    UlidDecoding(rusty_ulid::DecodingError),
 }
 
 #[actix_web::main]

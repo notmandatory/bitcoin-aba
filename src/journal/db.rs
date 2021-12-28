@@ -1,9 +1,11 @@
 use super::JournalEntry;
-use crate::Error;
+use crate::{ApiVersion, Error};
 use log::{debug, error, info};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::NO_PARAMS;
-use rusqlite::{named_params, params};
+use rusqlite::{named_params, params, Row};
+use rusty_ulid::Ulid;
+use std::str::FromStr;
 
 type SchemaVersion = u32;
 
@@ -17,13 +19,25 @@ pub struct Db {
 
 impl std::convert::From<rusqlite::Error> for Error {
     fn from(err: rusqlite::Error) -> Self {
-        Error::Rusqlite(err)
+        Error::Rusqlite(err.to_string())
     }
 }
 
 impl std::convert::From<r2d2::Error> for Error {
     fn from(err: r2d2::Error) -> Self {
-        Error::R2d2(err)
+        Error::R2d2(err.to_string())
+    }
+}
+
+impl std::convert::From<rusty_ulid::DecodingError> for Error {
+    fn from(err: rusty_ulid::DecodingError) -> Self {
+        Error::UlidDecoding(err)
+    }
+}
+
+impl std::convert::From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::SerdeJson(err.to_string())
     }
 }
 
@@ -42,6 +56,14 @@ impl Db {
     pub fn new() -> Result<Db, Error> {
         // Start N db executor actors (N = number of cores avail)
         let manager = SqliteConnectionManager::file("bitcoin-aba.sqlite");
+        let pool = Pool::new(manager)?;
+        Db::exec_migrations(&pool.get().expect("connection"))?;
+        Ok(Db { pool })
+    }
+
+    pub fn new_mem() -> Result<Db, Error> {
+        // Start N db executor actors (N = number of cores avail)
+        let manager = SqliteConnectionManager::memory();
         let pool = Pool::new(manager)?;
         Db::exec_migrations(&pool.get().expect("connection"))?;
         Ok(Db { pool })
@@ -114,15 +136,35 @@ impl Db {
         // TODO error if result size isn't 1
     }
 
-    //// Select accounts
-    //pub fn select_accounts(
-    //    conn: &Connection,
-    //) -> rusqlite::Result<usize> {
-    //    conn.execute_named(
-    //        "SELECT FROM journal_entry max(id)",
-    //        named_params![":id": &entry.id.to_string(), ":version": entry.version, ":action": serde_json::to_string(&entry.action).unwrap()],
-    //    )
-    //}
+    fn convert_row_entry(row: &Row) -> Result<JournalEntry, Error> {
+        let id = Ulid::from_str(row.get::<_, String>(0)?.as_str())?; //.map_err(|e| Error::from(e))?;
+        let version = row.get::<_, ApiVersion>(1)?;
+        let action = serde_json::from_str(row.get::<_, String>(2)?.as_str())?; //.map_err(|e| Error::from(e))?;
+        Ok(JournalEntry {
+            id,
+            version,
+            action,
+        })
+    }
+
+    // Select entries
+    pub fn select_entries(&self) -> Result<Vec<JournalEntry>, Error> {
+        let conn = self.pool.get().expect("connection");
+        let mut stmt = conn
+            .prepare("SELECT * FROM journal_entry")
+            .map_err(|e| Error::from(e))?;
+
+        let entity_rows = stmt
+            .query_and_then(NO_PARAMS, Db::convert_row_entry)
+            .map_err(|e| Error::from(e))?;
+
+        let mut result = Vec::new();
+        for entry in entity_rows {
+            //debug!("entry: {:?}", &entry?);
+            result.push(entry?);
+        }
+        Ok(result)
+    }
 
     //// Insert account
     //pub fn insert_account(connection: &Connection, account: &Account) -> Result<String, CommandError> {
@@ -174,4 +216,27 @@ impl Db {
     //    }
     //    Ok(account.id.to_string())
     //}
+}
+
+#[cfg(test)]
+mod test {
+    use crate::journal::db::Db;
+    use crate::journal::{Account, AccountType, Action, JournalEntry};
+
+    #[test]
+    pub fn test_insert_select() {
+        let db = Db::new_mem().unwrap();
+        let entry = JournalEntry::new(Action::AddAccount {
+            account: Account::new(
+                100,
+                "Test account".to_string(),
+                AccountType::Organization { parent_id: None },
+            ),
+        });
+
+        db.insert_entry(entry.clone()).unwrap();
+        let entries = db.select_entries().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.get(0).unwrap(), &entry);
+    }
 }
