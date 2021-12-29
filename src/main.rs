@@ -6,6 +6,7 @@ use actix_web::{get, middleware, post, web, App, Error as AWError, HttpResponse,
 use crate::journal::{Journal, JournalEntry};
 
 mod journal;
+mod ledger;
 
 type ApiVersion = u16;
 

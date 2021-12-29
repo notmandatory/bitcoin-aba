@@ -165,57 +165,6 @@ impl Db {
         }
         Ok(result)
     }
-
-    //// Insert account
-    //pub fn insert_account(connection: &Connection, account: &Account) -> Result<String, CommandError> {
-    //    let mut sql_statement = connection.prepare_cached("INSERT INTO account (id, number, description, type, parent_id, statement) VALUES (:id, :number, :description, :type, :parent_id, :statement)")?;
-    //    match account.account_type {
-    //        AccountType::Organization { parent_id } => {
-    //            sql_statement.execute(named_params! {
-    //                ":id": account.id.to_string(),
-    //                ":number": account.number,
-    //                ":description": account.description,
-    //                ":type": account.account_type.to_string(),
-    //                ":parent_id": parent_id.map(|ulid| ulid.to_string()).to_sql()?,
-    //                ":statement": Null,
-    //            })?;
-    //        }
-    //        AccountType::OrganizationUnit { parent_id } => {
-    //            sql_statement.execute(named_params! {
-    //                ":id": account.id.to_string(),
-    //                ":number": account.number,
-    //                ":description": account.description,
-    //                ":type": account.account_type.to_string(),
-    //                ":parent_id": parent_id.to_string(),
-    //                ":statement": Null,
-    //            })?;
-    //        }
-    //        AccountType::Category {
-    //            parent_id,
-    //            statement,
-    //        } => {
-    //            sql_statement.execute(named_params! {
-    //                ":id": account.id.to_string(),
-    //                ":number": account.number,
-    //                ":description": account.description,
-    //                ":type": account.account_type.to_string(),
-    //                ":parent_id": parent_id.to_string(),
-    //                ":statement": statement.to_string(),
-    //            })?;
-    //        }
-    //        AccountType::SubAccount { parent_id } => {
-    //            sql_statement.execute(named_params! {
-    //                ":id": account.id.to_string(),
-    //                ":number": account.number,
-    //                ":description": account.description,
-    //                ":type": account.account_type.to_string(),
-    //                ":parent_id": parent_id.to_string(),
-    //                ":statement": Null,
-    //            })?;
-    //        }
-    //    }
-    //    Ok(account.id.to_string())
-    //}
 }
 
 #[cfg(test)]
