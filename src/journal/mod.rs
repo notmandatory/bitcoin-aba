@@ -4,6 +4,7 @@ use db::Db;
 use rust_decimal::Decimal;
 use rusty_ulid::Ulid;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use time::OffsetDateTime;
@@ -150,11 +151,11 @@ pub type TransactionId = Ulid;
 /// Transaction represents a "balanced" set of debit and credit account values
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Transaction {
-    id: TransactionId,
-    datetime: OffsetDateTime,
-    description: String,
-    debits: Vec<AccountValue>,
-    credits: Vec<AccountValue>,
+    pub id: TransactionId,
+    pub datetime: OffsetDateTime,
+    pub description: String,
+    pub debits: Vec<AccountValue>,
+    pub credits: Vec<AccountValue>,
 }
 
 impl Transaction {
@@ -167,7 +168,7 @@ impl Transaction {
         let id = Ulid::generate();
         Transaction {
             id,
-            datetime: datetime,
+            datetime,
             description,
             debits,
             credits,
@@ -175,7 +176,7 @@ impl Transaction {
     }
 }
 
-/// Account and value of a debit or credit operation
+/// Account, currency and value of a debit or credit operation
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct AccountValue {
     pub account_id: AccountId,
@@ -336,7 +337,7 @@ mod test {
             name: Some("US Dollars".to_string()),
             description: Some("US Dollar Reserve Notes".to_string()),
         };
-        
+
         let debits = vec![AccountValue {
             account_id: bank_checking_acct.id.clone(),
             currency_number: usd.number,
@@ -350,7 +351,7 @@ mod test {
             amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
             description: Some("Equity credited to owner".to_string()),
         }];
-        
+
         let datetime = datetime!(2022-01-03 09:00 UTC);
         let funding_tx = Transaction::new(
             datetime,

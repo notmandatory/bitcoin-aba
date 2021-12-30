@@ -16,6 +16,7 @@ pub enum Error {
     R2d2(String),
     SerdeJson(String),
     UlidDecoding(rusty_ulid::DecodingError),
+    MissingAccount(journal::AccountId),
 }
 
 #[actix_web::main]
