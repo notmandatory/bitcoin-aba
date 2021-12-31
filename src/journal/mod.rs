@@ -4,7 +4,6 @@ use db::Db;
 use rust_decimal::Decimal;
 use rusty_ulid::Ulid;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use time::OffsetDateTime;

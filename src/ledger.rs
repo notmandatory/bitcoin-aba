@@ -69,9 +69,9 @@ impl Ledger {
             transaction_map,
         })
     }
-
-    pub fn get_parent<'a>(&'a self, account: &'a Account) -> Result<Option<&Account>, Error> {
-        let parent_id: Option<AccountId> = match account.account_type {
+    
+    pub fn get_parent_id(&self, account: &Account) -> Result<Option<AccountId>, Error> {
+        Ok(match account.account_type {
             AccountType::Organization {
                 parent_id: Some(parent_id),
             } => Some(parent_id),
@@ -79,7 +79,11 @@ impl Ledger {
             AccountType::OrganizationUnit { parent_id } => Some(parent_id),
             AccountType::Category { parent_id, .. } => Some(parent_id),
             AccountType::SubAccount { parent_id } => Some(parent_id),
-        };
+        })
+    }
+
+    pub fn get_parent<'a>(&'a self, account: &'a Account) -> Result<Option<&Account>, Error> {
+        let parent_id: Option<AccountId> = self.get_parent_id(account)?;
         match parent_id {
             Some(id) => {
                 if let Some(account) = self.account_map.get(&id) {
@@ -90,6 +94,20 @@ impl Ledger {
             }
             None => Ok(None),
         }
+    }
+
+    pub fn get_children<'a>(&'a self, account: &'a Account) -> Vec<&Account> {
+        self.account_map.values().filter(|a| {
+            if let Ok ( Some ( parent_id ) ) = self.get_parent_id(a) {
+              parent_id == account.id  
+            } else {
+                false
+            }
+        }).collect()
+    }
+    
+    pub fn get_child_ids<'a>(&'a self, account: &'a Account) -> Vec<AccountId> {
+        self.get_children(account).iter().map(|c| c.id).collect()
     }
 
     pub fn get_full_number(&self, account: &Account) -> Result<Vec<AccountNumber>, Error> {
@@ -180,6 +198,40 @@ mod test {
 
         for account in &test_data.accounts {
             debug!("account: {:?}, number: {:?}", account, ledger.get_full_number(account).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_get_children() {
+        env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+
+        let journal = Journal::new_mem().expect("journal");
+
+        let test_data = test_data();
+        for entry in &test_data.journal_entries {
+            journal.add(entry.clone()).unwrap();
+        }
+        let ledger = Ledger::new(&journal).expect("ledger");
+
+        for account in &test_data.accounts {
+            debug!("account: {:?}, children: {:?}", account, ledger.get_children(account));
+        }
+    }
+
+    #[test]
+    fn test_get_child_ids() {
+        env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+
+        let journal = Journal::new_mem().expect("journal");
+
+        let test_data = test_data();
+        for entry in &test_data.journal_entries {
+            journal.add(entry.clone()).unwrap();
+        }
+        let ledger = Ledger::new(&journal).expect("ledger");
+
+        for account in &test_data.accounts {
+            debug!("account: {:?}, children: {:?}", account, ledger.get_child_ids(account));
         }
     }
 
