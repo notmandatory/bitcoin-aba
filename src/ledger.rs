@@ -69,7 +69,7 @@ impl Ledger {
             transaction_map,
         })
     }
-    
+
     pub fn get_parent_id(&self, account: &Account) -> Result<Option<AccountId>, Error> {
         Ok(match account.account_type {
             AccountType::Organization {
@@ -99,13 +99,13 @@ impl Ledger {
     pub fn get_children<'a>(&'a self, account: &'a Account) -> Vec<&Account> {
         self.account_map.values().filter(|a| {
             if let Ok ( Some ( parent_id ) ) = self.get_parent_id(a) {
-              parent_id == account.id  
+              parent_id == account.id
             } else {
                 false
             }
         }).collect()
     }
-    
+
     pub fn get_child_ids<'a>(&'a self, account: &'a Account) -> Vec<AccountId> {
         self.get_children(account).iter().map(|c| c.id).collect()
     }
@@ -135,9 +135,17 @@ mod test {
     use rust_decimal::Decimal;
     use time::macros::datetime;
 
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn setup() {
+        INIT.call_once(|| env_logger::init_from_env(env_logger::Env::new().default_filter_or("info")));
+    }
+
     #[test]
     fn test_new_get() {
-        env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+        setup();
 
         let journal = Journal::new_mem().expect("journal");
 
@@ -169,8 +177,7 @@ mod test {
 
     #[test]
     fn test_get_parent() {
-        env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
-
+        setup();
         let journal = Journal::new_mem().expect("journal");
 
         let test_data = test_data();
@@ -178,7 +185,7 @@ mod test {
             journal.add(entry.clone()).unwrap();
         }
         let ledger = Ledger::new(&journal).expect("ledger");
-        
+
         for account in &test_data.accounts {
             debug!("account: {:?}, parent: {:?}", account, ledger.get_parent(account).unwrap());
         }
@@ -186,8 +193,7 @@ mod test {
 
     #[test]
     fn test_get_full_number() {
-        env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
-
+        setup();
         let journal = Journal::new_mem().expect("journal");
 
         let test_data = test_data();
@@ -203,7 +209,7 @@ mod test {
 
     #[test]
     fn test_get_children() {
-        env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+        setup();
 
         let journal = Journal::new_mem().expect("journal");
 
@@ -220,7 +226,7 @@ mod test {
 
     #[test]
     fn test_get_child_ids() {
-        env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+        setup();
 
         let journal = Journal::new_mem().expect("journal");
 
@@ -243,7 +249,7 @@ mod test {
         pub transactions: Vec<Transaction>,
         pub journal_entries: Vec<JournalEntry>,
     }
-    
+
     pub fn test_data() -> TestEntries {
         // COA entries
         let org_acct = Account::new(
@@ -338,7 +344,7 @@ mod test {
             name: Some("US Dollars".to_string()),
             description: Some("US Dollar Reserve Notes".to_string()),
         };
-        
+
         let currencies = vec![usd.clone()];
 
         let debits = vec![AccountValue {
@@ -362,7 +368,7 @@ mod test {
             debits,
             credits,
         );
-        
+
         let transactions = vec![funding_tx.clone()];
 
         let usd_entry = JournalEntry::new(Action::AddCurrency { currency: usd });

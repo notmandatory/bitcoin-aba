@@ -128,7 +128,7 @@ impl Account {
     }
 }
 
-/// Currency number ie. ISO 4217
+/// Currency number ie. ISO 4217, use > 1000 for non-ISO 4217 currencies like BTC
 pub type CurrencyNumber = u32;
 
 /// Currency scale
