@@ -21,3 +21,4 @@ rusty_ulid = { version = "0.11", features = ["serde"] }
 rust_decimal = "1.19"
 rust_decimal_macros = "1.19"
 time = {version = "0.3", features = ["serde-human-readable", "macros"] }
+bdk = "0.17.0"
