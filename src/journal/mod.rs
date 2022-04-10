@@ -1,12 +1,14 @@
 use crate::{ApiVersion, Error};
 use db::Db;
 
+use bdk::descriptor::ExtendedDescriptor;
+use bdk::TransactionDetails;
 use rust_decimal::Decimal;
 use rusty_ulid::Ulid;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-use time::OffsetDateTime;
+use time::{Date, OffsetDateTime};
 
 mod db;
 
@@ -18,7 +20,7 @@ pub struct Journal {
 }
 
 impl Journal {
-    pub fn new() -> Result<Journal, Error> {
+    pub fn new() -> Result<Self, Error> {
         let db = Db::new()?;
         Ok(Journal { db })
     }
@@ -49,7 +51,7 @@ pub struct JournalEntry {
 impl JournalEntry {
     const DEFAULT_VERSION: ApiVersion = 1;
 
-    pub fn new(action: Action) -> JournalEntry {
+    pub fn new(action: Action) -> Self {
         let id = Ulid::generate();
         let version = JournalEntry::DEFAULT_VERSION;
         JournalEntry {
@@ -74,6 +76,33 @@ pub type AccountId = Ulid;
 /// Account number
 pub type AccountNumber = u32;
 
+/// Entity id
+pub type EntityId = Ulid;
+
+pub enum EntityType {
+    Individual,
+    Organization,
+}
+
+pub struct Entity {
+    pub entity_id: EntityId,
+    pub entity_type: EntityType,
+    pub name: String,
+    pub address: Option<String>,
+}
+
+impl Entity {
+    pub fn new(entity_type: EntityType, name: String, address: Option<String>) -> Self {
+        let id = Ulid::generate();
+        Entity {
+            entity_id: id,
+            entity_type,
+            name,
+            address,
+        }
+    }
+}
+
 // *organization -> *category -> *subaccount
 // *organization -> *organizationunit -> *category -> *subaccount
 // *organization -> *category -> *organizationunit -> *subaccount
@@ -83,16 +112,37 @@ pub type AccountNumber = u32;
 pub enum AccountType {
     Organization {
         parent_id: Option<AccountId>,
+        entity_id: EntityId,
     },
     OrganizationUnit {
         parent_id: AccountId,
+        entity_id: EntityId,
     },
     Category {
         parent_id: AccountId,
         statement: FinancialStatement,
     },
-    SubAccount {
+    LedgerAccount {
         parent_id: AccountId,
+        currency_id: CurrencyId,
+    },
+    EquityAccount {
+        parent_id: AccountId,
+        currency_id: CurrencyId,
+        entity_id: EntityId,
+    },
+    BankAccount {
+        parent_id: AccountId,
+        currency_id: CurrencyId,
+        entity_id: EntityId,
+        routing: u32,
+        account: u64,
+    },
+    BitcoinAccount {
+        parent_id: AccountId,
+        entity_id: EntityId,
+        descriptor: ExtendedDescriptor,
+        change_descriptor: Option<ExtendedDescriptor>,
     },
 }
 
@@ -102,7 +152,10 @@ impl fmt::Display for AccountType {
             AccountType::Organization { .. } => "Organization",
             AccountType::OrganizationUnit { .. } => "OrganizationUnit",
             AccountType::Category { .. } => "Category",
-            AccountType::SubAccount { .. } => "SubAccount",
+            AccountType::LedgerAccount { .. } => "LedgerAccount",
+            AccountType::EquityAccount { .. } => "EquityAccount",
+            AccountType::BankAccount { .. } => "BankAccount",
+            AccountType::BitcoinAccount { .. } => "BitcoinAccount",
         })
     }
 }
@@ -117,7 +170,7 @@ pub struct Account {
 }
 
 impl Account {
-    pub fn new(number: AccountNumber, description: String, account_type: AccountType) -> Account {
+    pub fn new(number: AccountNumber, description: String, account_type: AccountType) -> Self {
         let id = Ulid::generate();
         Account {
             id,
@@ -128,16 +181,16 @@ impl Account {
     }
 }
 
-/// Currency number ie. ISO 4217, use > 1000 for non-ISO 4217 currencies like BTC
-pub type CurrencyNumber = u32;
+/// Currency id ie. ISO 4217, use > 1000 for non-ISO 4217 currencies like BTC
+pub type CurrencyId = u32;
 
 /// Currency scale
 pub type CurrencyScale = u32;
 
-/// Units for a value, ie. BTC, USD, EUR
+/// Units for a fiat currency value, ie. USD, EUR
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Currency {
-    pub number: CurrencyNumber,
+    pub id: CurrencyId,
     pub code: String,
     pub scale: CurrencyScale,
     pub name: Option<String>,
@@ -147,6 +200,7 @@ pub struct Currency {
 /// Transaction id
 pub type TransactionId = Ulid;
 
+/// debits => cash in to account, credits <= cash out of account
 /// Transaction represents a "balanced" set of debit and credit account values
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Transaction {
@@ -163,7 +217,7 @@ impl Transaction {
         description: String,
         debits: Vec<AccountValue>,
         credits: Vec<AccountValue>,
-    ) -> Transaction {
+    ) -> Self {
         let id = Ulid::generate();
         Transaction {
             id,
@@ -175,11 +229,72 @@ impl Transaction {
     }
 }
 
+pub enum PaymentMethod {
+    Bitcoin,
+    Ach,
+    Check,
+    Cash,
+}
+
+pub enum PaymentTerms {
+    ImmediatePayment,
+    PaymentInAdvance,
+    NetDays {
+        days: u32,
+        late_fee_interest: Decimal,
+    },
+    NetDaysDiscount {
+        days: u32,
+        discount_days: u32,
+        discount: Decimal,
+        late_fee_interest: Decimal,
+    },
+}
+
+pub enum Payment {
+    Bitcoin {
+        details: TransactionDetails,
+    },
+    Lightning {
+        details: String,
+    },
+    Ach {
+        transaction_id: String,
+        datetime: OffsetDateTime,
+        currency_id: CurrencyId,
+        amount: Decimal,
+        memo: String,
+    },
+    Check {
+        check_number: u32,
+        check_routing: u32,
+        check_account: u32,
+        date: Date,
+        currency_id: CurrencyId,
+        amount: Decimal,
+        memo: String,
+    },
+    Cash {
+        date: Date,
+        currency_id: CurrencyId,
+        amount: Decimal,
+    },
+}
+
+pub enum TransactionType {
+    Invoice {
+        payment_method: PaymentMethod,
+        payment_terms: PaymentTerms,
+        payments: Vec<Payment>,
+    },
+    LedgerAdjustment,
+}
+
 /// Account, currency and value of a debit or credit operation
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct AccountValue {
     pub account_id: AccountId,
-    pub currency_number: CurrencyNumber,
+    pub currency_id: CurrencyId,
     pub amount: Decimal,
     pub description: Option<String>,
 }
@@ -217,8 +332,8 @@ mod test {
     //use log::debug;
     use crate::journal::Action::AddAccount;
     use crate::journal::{
-        Account, AccountType, AccountValue, Action, Currency, FinancialStatement, Journal,
-        JournalEntry, Transaction,
+        Account, AccountType, AccountValue, Action, Currency, Entity, EntityType,
+        FinancialStatement, Journal, JournalEntry, Transaction,
     };
     use rust_decimal::Decimal;
     use time::macros::datetime;
@@ -243,11 +358,28 @@ mod test {
     // utility functions
 
     pub fn test_entries() -> Vec<JournalEntry> {
+        // Currencies
+        let usd = Currency {
+            id: 840,
+            code: "USD".to_string(),
+            scale: 2,
+            name: Some("US Dollars".to_string()),
+            description: Some("US Dollar Reserve Notes".to_string()),
+        };
+
+        // Entities
+        let org1 = Entity::new(EntityType::Organization, "Test Co.".to_string(), None);
+        let owner1 = Entity::new(EntityType::Individual, "Owner One".to_string(), None);
+        let bank1 = Entity::new(EntityType::Organization, "Test Bank".to_string(), None);
+
         // COA entries
         let org_acct = Account::new(
             10,
             "Test Organization".to_string(),
-            AccountType::Organization { parent_id: None },
+            AccountType::Organization {
+                parent_id: None,
+                entity_id: org1.entity_id,
+            },
         );
         let assets_acct = Account::new(
             100,
@@ -292,22 +424,29 @@ mod test {
         let owner1_acct = Account::new(
             100,
             "Owner 1".to_string(),
-            AccountType::SubAccount {
+            AccountType::EquityAccount {
                 parent_id: equity_acct.id,
+                currency_id: usd.id,
+                entity_id: owner1.entity_id,
             },
         );
         let bank_checking_acct = Account::new(
             100,
             "Bank Checking".to_string(),
-            AccountType::SubAccount {
+            AccountType::BankAccount {
                 parent_id: assets_acct.id,
+                currency_id: usd.id,
+                entity_id: bank1.entity_id,
+                routing: 11111,
+                account: 123123123123,
             },
         );
         let office_supp_acct = Account::new(
             100,
             "Office Supplies".to_string(),
-            AccountType::SubAccount {
+            AccountType::LedgerAccount {
                 parent_id: expenses_acct.id,
+                currency_id: usd.id,
             },
         );
         let accounts = vec![
@@ -329,24 +468,16 @@ mod test {
 
         // Test transaction entry
 
-        let usd = Currency {
-            number: 840,
-            code: "USD".to_string(),
-            scale: 2,
-            name: Some("US Dollars".to_string()),
-            description: Some("US Dollar Reserve Notes".to_string()),
-        };
-
         let debits = vec![AccountValue {
             account_id: bank_checking_acct.id.clone(),
-            currency_number: usd.number,
+            currency_id: usd.id,
             amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
             description: Some("Owner funds deposited to bank".to_string()),
         }];
 
         let credits = vec![AccountValue {
             account_id: owner1_acct.id.clone(),
-            currency_number: usd.number,
+            currency_id: usd.id,
             amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
             description: Some("Equity credited to owner".to_string()),
         }];

@@ -55,7 +55,7 @@ static MIGRATIONS: &[&str] = &[
 impl Db {
     pub fn new() -> Result<Db, Error> {
         // Start N db executor actors (N = number of cores avail)
-        let manager = SqliteConnectionManager::file("bitcoin-aba.sqlite");
+        let manager = SqliteConnectionManager::file("journal.db");
         let pool = Pool::new(manager)?;
         Db::exec_migrations(&pool.get().expect("connection"))?;
         Ok(Db { pool })
@@ -151,7 +151,7 @@ impl Db {
     pub fn select_entries(&self) -> Result<Vec<JournalEntry>, Error> {
         let conn = self.pool.get().expect("connection");
         let mut stmt = conn
-            .prepare("SELECT * FROM journal_entry")
+            .prepare("SELECT * FROM journal_entry ORDER BY id")
             .map_err(|e| Error::from(e))?;
 
         let entity_rows = stmt
@@ -170,18 +170,22 @@ impl Db {
 #[cfg(test)]
 mod test {
     use crate::journal::db::Db;
-    use crate::journal::{Account, AccountType, Action, JournalEntry};
+    use crate::journal::{Account, AccountType, Action, Entity, EntityType, JournalEntry};
 
     #[test]
     pub fn test_insert_select() {
         let db = Db::new_mem().unwrap();
-        let entry = JournalEntry::new(Action::AddAccount {
-            account: Account::new(
-                100,
-                "Test account".to_string(),
-                AccountType::Organization { parent_id: None },
-            ),
-        });
+
+        let org = Entity::new(EntityType::Organization, "Test Org".to_string(), None);
+        let account = Account::new(
+            100,
+            "Test account".to_string(),
+            AccountType::Organization {
+                parent_id: None,
+                entity_id: org.entity_id,
+            },
+        );
+        let entry = JournalEntry::new(Action::AddAccount { account });
 
         db.insert_entry(entry.clone()).unwrap();
         let entries = db.select_entries().unwrap();

@@ -1,6 +1,6 @@
 use crate::journal::Action::{AddAccount, AddCurrency, AddTransaction};
 use crate::journal::{
-    Account, AccountId, AccountNumber, AccountType, Currency, CurrencyNumber, Journal,
+    Account, AccountId, AccountNumber, AccountType, Currency, CurrencyId, Journal,
     JournalEntry, Transaction, TransactionId,
 };
 use crate::Error;
@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 #[derive(Clone)]
 pub struct Ledger {
     pub account_map: BTreeMap<AccountId, Account>,
-    pub currency_map: BTreeMap<CurrencyNumber, Currency>,
+    pub currency_map: BTreeMap<CurrencyId, Currency>,
     pub transaction_map: BTreeMap<TransactionId, Transaction>,
 }
 
@@ -19,7 +19,7 @@ impl Ledger {
         let journal_entries = journal.view()?;
 
         let mut account_map: BTreeMap<AccountId, Account> = BTreeMap::new();
-        let mut currency_map: BTreeMap<CurrencyNumber, Currency> = BTreeMap::new();
+        let mut currency_map: BTreeMap<CurrencyId, Currency> = BTreeMap::new();
         let mut transaction_map: BTreeMap<TransactionId, Transaction> = BTreeMap::new();
 
         // sync journal entries to ledger collections
@@ -47,7 +47,7 @@ impl Ledger {
                         "insert currency: {}",
                         serde_json::to_string(&currency).unwrap()
                     );
-                    currency_map.insert(currency.number, currency);
+                    currency_map.insert(currency.id, currency);
                 }
                 JournalEntry {
                     id: _,
@@ -74,11 +74,17 @@ impl Ledger {
         Ok(match account.account_type {
             AccountType::Organization {
                 parent_id: Some(parent_id),
+                ..
             } => Some(parent_id),
-            AccountType::Organization { parent_id: None } => None,
-            AccountType::OrganizationUnit { parent_id } => Some(parent_id),
+            AccountType::Organization {
+                parent_id: None, ..
+            } => None,
+            AccountType::OrganizationUnit { parent_id, .. } => Some(parent_id),
             AccountType::Category { parent_id, .. } => Some(parent_id),
-            AccountType::SubAccount { parent_id } => Some(parent_id),
+            AccountType::LedgerAccount { parent_id, .. } => Some(parent_id),
+            AccountType::EquityAccount { parent_id, .. } => Some(parent_id),
+            AccountType::BankAccount { parent_id, .. } => Some(parent_id),
+            AccountType::BitcoinAccount { parent_id, .. } => Some(parent_id),
         })
     }
 
@@ -97,13 +103,16 @@ impl Ledger {
     }
 
     pub fn get_children<'a>(&'a self, account: &'a Account) -> Vec<&Account> {
-        self.account_map.values().filter(|a| {
-            if let Ok ( Some ( parent_id ) ) = self.get_parent_id(a) {
-              parent_id == account.id
-            } else {
-                false
-            }
-        }).collect()
+        self.account_map
+            .values()
+            .filter(|a| {
+                if let Ok(Some(parent_id)) = self.get_parent_id(a) {
+                    parent_id == account.id
+                } else {
+                    false
+                }
+            })
+            .collect()
     }
 
     pub fn get_child_ids<'a>(&'a self, account: &'a Account) -> Vec<AccountId> {
@@ -125,13 +134,13 @@ impl Ledger {
 
 #[cfg(test)]
 mod test {
-    use log::debug;
     use crate::journal::Action::AddAccount;
     use crate::journal::{
-        Account, AccountType, AccountValue, Action, Currency, FinancialStatement, Journal,
-        JournalEntry, Transaction,
+        Account, AccountType, AccountValue, Action, Currency, Entity, EntityType,
+        FinancialStatement, Journal, JournalEntry, Transaction,
     };
     use crate::ledger::Ledger;
+    use log::debug;
     use rust_decimal::Decimal;
     use time::macros::datetime;
 
@@ -140,7 +149,9 @@ mod test {
     static INIT: Once = Once::new();
 
     fn setup() {
-        INIT.call_once(|| env_logger::init_from_env(env_logger::Env::new().default_filter_or("info")));
+        INIT.call_once(|| {
+            env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"))
+        });
     }
 
     #[test]
@@ -167,7 +178,7 @@ mod test {
         let debit = transaction1.debits.get(0).unwrap();
         let debit_account = ledger.account_map.get(&debit.account_id).unwrap();
         assert_eq!(debit_account.number, 100);
-        if let AccountType::SubAccount { parent_id } = debit_account.account_type {
+        if let AccountType::BankAccount { parent_id, .. } = debit_account.account_type {
             let parent_account = ledger.account_map.get(&parent_id).unwrap();
             assert_eq!(parent_account.number, 100);
         } else {
@@ -187,7 +198,11 @@ mod test {
         let ledger = Ledger::new(&journal).expect("ledger");
 
         for account in &test_data.accounts {
-            debug!("account: {:?}, parent: {:?}", account, ledger.get_parent(account).unwrap());
+            debug!(
+                "account: {:?}, parent: {:?}",
+                account,
+                ledger.get_parent(account).unwrap()
+            );
         }
     }
 
@@ -203,7 +218,11 @@ mod test {
         let ledger = Ledger::new(&journal).expect("ledger");
 
         for account in &test_data.accounts {
-            debug!("account: {:?}, number: {:?}", account, ledger.get_full_number(account).unwrap());
+            debug!(
+                "account: {:?}, number: {:?}",
+                account,
+                ledger.get_full_number(account).unwrap()
+            );
         }
     }
 
@@ -220,7 +239,11 @@ mod test {
         let ledger = Ledger::new(&journal).expect("ledger");
 
         for account in &test_data.accounts {
-            debug!("account: {:?}, children: {:?}", account, ledger.get_children(account));
+            debug!(
+                "account: {:?}, children: {:?}",
+                account,
+                ledger.get_children(account)
+            );
         }
     }
 
@@ -237,7 +260,11 @@ mod test {
         let ledger = Ledger::new(&journal).expect("ledger");
 
         for account in &test_data.accounts {
-            debug!("account: {:?}, children: {:?}", account, ledger.get_child_ids(account));
+            debug!(
+                "account: {:?}, children: {:?}",
+                account,
+                ledger.get_child_ids(account)
+            );
         }
     }
 
@@ -251,11 +278,28 @@ mod test {
     }
 
     pub fn test_data() -> TestEntries {
+        // Entity
+        let company = Entity::new(EntityType::Organization, "Test Company".to_string(), None);
+        let owner = Entity::new(EntityType::Individual, "Test Owner".to_string(), None);
+        let bank1 = Entity::new(EntityType::Organization, "Test Bank".to_string(), None);
+
+        // Currencies
+        let usd = Currency {
+            id: 840,
+            code: "USD".to_string(),
+            scale: 2,
+            name: Some("US Dollars".to_string()),
+            description: Some("US Dollar Reserve Notes".to_string()),
+        };
+
         // COA entries
         let org_acct = Account::new(
             10,
             "Test Organization".to_string(),
-            AccountType::Organization { parent_id: None },
+            AccountType::Organization {
+                parent_id: None,
+                entity_id: company.entity_id,
+            },
         );
         let assets_acct = Account::new(
             100,
@@ -300,22 +344,29 @@ mod test {
         let owner1_acct = Account::new(
             100,
             "Owner 1".to_string(),
-            AccountType::SubAccount {
+            AccountType::EquityAccount {
                 parent_id: equity_acct.id,
+                currency_id: usd.id,
+                entity_id: owner.entity_id,
             },
         );
         let bank_checking_acct = Account::new(
             100,
             "Bank Checking".to_string(),
-            AccountType::SubAccount {
+            AccountType::BankAccount {
                 parent_id: assets_acct.id,
+                currency_id: usd.id,
+                entity_id: bank1.entity_id,
+                routing: 11111,
+                account: 123123123123,
             },
         );
         let office_supp_acct = Account::new(
             100,
             "Office Supplies".to_string(),
-            AccountType::SubAccount {
+            AccountType::LedgerAccount {
                 parent_id: expenses_acct.id,
+                currency_id: usd.id,
             },
         );
         let accounts = vec![
@@ -337,26 +388,18 @@ mod test {
 
         // Test transaction entry
 
-        let usd = Currency {
-            number: 840,
-            code: "USD".to_string(),
-            scale: 2,
-            name: Some("US Dollars".to_string()),
-            description: Some("US Dollar Reserve Notes".to_string()),
-        };
-
         let currencies = vec![usd.clone()];
 
         let debits = vec![AccountValue {
             account_id: bank_checking_acct.id.clone(),
-            currency_number: usd.number,
+            currency_id: usd.id,
             amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
             description: Some("Owner funds deposited to bank".to_string()),
         }];
 
         let credits = vec![AccountValue {
             account_id: owner1_acct.id.clone(),
-            currency_number: usd.number,
+            currency_id: usd.id,
             amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
             description: Some("Equity credited to owner".to_string()),
         }];
