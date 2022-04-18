@@ -27,11 +27,11 @@ curl -v -X GET http://localhost:8080/ledger/accounts -H "Content-Type: applicati
 JOURNAL_ULID=$(curl -s -X GET http://localhost:8080/ulid -H "Content-Type: application/json")
 EQUITY_ULID=$(curl -s -X GET http://localhost:8080/ulid -H "Content-Type: application/json")
 
-curl -v -X POST http://localhost:8080/journal -H "Content-Type: application/json" -d '{"id":"'"$JOURNAL_ULID"'","version":1,"action":{"AddAccount":{"account":{"id":"'"$EQUITY_ULID"'","number":3,"description":"Equity","account_type":{"LedgerAccount":{"parent_id":"'"$ORG_ULID"'", "currency_id":840 }}}}}}'
+curl -v -X POST http://localhost:8080/journal -H "Content-Type: application/json" -d '{"id":"'"$JOURNAL_ULID"'","version":1,"action":{"AddAccount":{"account":{"id":"'"$EQUITY_ULID"'","number":3,"description":"Equity","account_type":{"LedgerAccount":{"parent_id":"'"$ORG_ULID"'"}}}}}}'
 
 JOURNAL_ULID=$(curl -s -X GET http://localhost:8080/ulid -H "Content-Type: application/json")
 EQUITY_STEVE_ULID=$(curl -s -X GET http://localhost:8080/ulid -H "Content-Type: application/json")
 
-curl -v -X POST http://localhost:8080/journal -H "Content-Type: application/json" -d '{"id":"'"$JOURNAL_ULID"'","version":1,"action":{"AddAccount":{"account":{"id":"'"$EQUITY_STEVE_ULID"'","number":100,"description":"Steve Equity","account_type":{"EquityAccount":{"parent_id":"'"$EQUITY_ULID"'", "currency_id":840, "entity_id":"'"$STEVE_ULID"'" }}}}}}'
+curl -v -X POST http://localhost:8080/journal -H "Content-Type: application/json" -d '{"id":"'"$JOURNAL_ULID"'","version":1,"action":{"AddAccount":{"account":{"id":"'"$EQUITY_STEVE_ULID"'","number":100,"description":"Steve Equity","account_type":{"EquityAccount":{"parent_id":"'"$EQUITY_ULID"'", "entity_id":"'"$STEVE_ULID"'" }}}}}}'
 
 curl -X GET http://localhost:8080/ledger/accounts

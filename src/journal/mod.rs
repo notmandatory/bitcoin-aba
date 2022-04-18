@@ -126,11 +126,9 @@ pub enum AccountType {
     },
     LedgerAccount {
         parent_id: AccountId,
-        currency_id: CurrencyId,
     },
     EquityAccount {
         parent_id: AccountId,
-        currency_id: CurrencyId,
         entity_id: EntityId,
     },
     BankAccount {

@@ -82,19 +82,15 @@ impl Ledger {
             }
             AccountType::LedgerAccount {
                 parent_id,
-                currency_id,
             } => {
                 debug!("adding ledger account with parent id {}", &parent_id);
                 self.account_exists(parent_id)?;
-                self.currency_exists(currency_id)?;
             }
             AccountType::EquityAccount {
                 parent_id,
-                currency_id,
                 entity_id,
             } => {
                 self.account_exists(parent_id)?;
-                self.currency_exists(currency_id)?;
                 self.entity_exists(entity_id)?;
             }
             AccountType::BankAccount {
