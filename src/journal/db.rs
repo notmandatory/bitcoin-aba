@@ -55,7 +55,7 @@ static MIGRATIONS: &[&str] = &[
 impl Db {
     pub fn new() -> Result<Db, Error> {
         // Start N db executor actors (N = number of cores avail)
-        let manager = SqliteConnectionManager::file("journal.db");
+        let manager = SqliteConnectionManager::file("bitcoin-aba.db");
         let pool = Pool::new(manager)?;
         Db::exec_migrations(&pool.get().expect("connection"))?;
         Ok(Db { pool })
@@ -70,7 +70,7 @@ impl Db {
     }
 
     fn exec_migrations(conn: &Connection) -> Result<(), Error> {
-        let version: SchemaVersion = Db::select_version(&conn)?;
+        let version: SchemaVersion = Db::select_version(conn)?;
         info!("At version {}", version);
 
         if version == MIGRATIONS.len() as SchemaVersion {
@@ -91,7 +91,7 @@ impl Db {
             i += 1;
         }
 
-        Db::update_version(&conn, i)?;
+        Db::update_version(conn, i)?;
         Ok(())
     }
 
@@ -152,11 +152,11 @@ impl Db {
         let conn = self.pool.get().expect("connection");
         let mut stmt = conn
             .prepare("SELECT * FROM journal_entry ORDER BY id")
-            .map_err(|e| Error::from(e))?;
+            .map_err(Error::from)?;
 
         let entity_rows = stmt
             .query_and_then(NO_PARAMS, Db::convert_row_entry)
-            .map_err(|e| Error::from(e))?;
+            .map_err(Error::from)?;
 
         let mut result = Vec::new();
         for entry in entity_rows {
@@ -182,7 +182,7 @@ mod test {
             "Test account".to_string(),
             AccountType::Organization {
                 parent_id: None,
-                entity_id: org.entity_id,
+                entity_id: org.id,
             },
         );
         let entry = JournalEntry::new(Action::AddAccount { account });

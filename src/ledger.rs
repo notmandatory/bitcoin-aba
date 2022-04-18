@@ -1,73 +1,184 @@
-use crate::journal::Action::{AddAccount, AddCurrency, AddTransaction};
+use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
 use crate::journal::{
-    Account, AccountId, AccountNumber, AccountType, Currency, CurrencyId, Journal,
-    JournalEntry, Transaction, TransactionId,
+    Account, AccountId, AccountNumber, AccountType, Currency, CurrencyId, Entity, EntityId,
+    Journal, JournalEntry, Transaction, TransactionId,
 };
 use crate::Error;
-use log::debug;
+use log::{debug, error};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Ledger {
-    pub account_map: BTreeMap<AccountId, Account>,
-    pub currency_map: BTreeMap<CurrencyId, Currency>,
-    pub transaction_map: BTreeMap<TransactionId, Transaction>,
+    account_map: BTreeMap<AccountId, Arc<Account>>,
+    currency_map: BTreeMap<CurrencyId, Arc<Currency>>,
+    entity_map: BTreeMap<EntityId, Arc<Entity>>,
+    transaction_map: BTreeMap<TransactionId, Arc<Transaction>>,
 }
 
 impl Ledger {
-    pub fn new(journal: &Journal) -> Result<Ledger, Error> {
-        let journal_entries = journal.view()?;
+    pub fn new() -> Ledger {
+        let account_map: BTreeMap<AccountId, Arc<Account>> = BTreeMap::new();
+        let currency_map: BTreeMap<CurrencyId, Arc<Currency>> = BTreeMap::new();
+        let entity_map: BTreeMap<EntityId, Arc<Entity>> = BTreeMap::new();
+        let transaction_map: BTreeMap<TransactionId, Arc<Transaction>> = BTreeMap::new();
 
-        let mut account_map: BTreeMap<AccountId, Account> = BTreeMap::new();
-        let mut currency_map: BTreeMap<CurrencyId, Currency> = BTreeMap::new();
-        let mut transaction_map: BTreeMap<TransactionId, Transaction> = BTreeMap::new();
-
-        // sync journal entries to ledger collections
-        for je in journal_entries {
-            // TODO validate id and version
-
-            match je {
-                JournalEntry {
-                    id: _,
-                    version: _,
-                    action: AddAccount { account },
-                } => {
-                    debug!(
-                        "insert account: {}",
-                        serde_json::to_string(&account).unwrap()
-                    );
-                    account_map.insert(account.id, account);
-                }
-                JournalEntry {
-                    id: _,
-                    version: _,
-                    action: AddCurrency { currency },
-                } => {
-                    debug!(
-                        "insert currency: {}",
-                        serde_json::to_string(&currency).unwrap()
-                    );
-                    currency_map.insert(currency.id, currency);
-                }
-                JournalEntry {
-                    id: _,
-                    version: _,
-                    action: AddTransaction { transaction },
-                } => {
-                    debug!(
-                        "insert transaction: {}",
-                        serde_json::to_string(&transaction).unwrap()
-                    );
-                    transaction_map.insert(transaction.id, transaction);
-                }
-            }
-        }
-
-        Ok(Ledger {
+        Ledger {
             account_map,
             currency_map,
+            entity_map,
             transaction_map,
-        })
+        }
+    }
+
+    pub fn account_exists(&self, account_id: &AccountId) -> Result<(), Error> {
+        if !self.account_map.contains_key(&account_id) {
+            return Err(Error::MissingAccount(account_id.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn currency_exists(&self, currency_id: &CurrencyId) -> Result<(), Error> {
+        if !self.currency_map.contains_key(&currency_id) {
+            return Err(Error::MissingCurrency(currency_id.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn entity_exists(&self, entity_id: &EntityId) -> Result<(), Error> {
+        if !self.entity_map.contains_key(&entity_id) {
+            return Err(Error::MissingEntity(entity_id.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn transaction_exists(&self, transaction_id: &TransactionId) -> Result<(), Error> {
+        if !self.transaction_map.contains_key(&transaction_id) {
+            return Err(Error::MissingTransaction(transaction_id.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn account_type_valid(&self, account_type: &AccountType) -> Result<(), Error> {
+        match account_type {
+            AccountType::Organization {
+                parent_id,
+                entity_id,
+            } => {
+                if let Some(parent_id) = parent_id {
+                    self.account_exists(parent_id)?;
+                }
+                self.entity_exists(entity_id)?;
+            }
+            AccountType::OrganizationUnit {
+                parent_id,
+                entity_id,
+            } => {
+                self.account_exists(parent_id)?;
+                self.entity_exists(entity_id)?;
+            }
+            AccountType::Category { parent_id, .. } => {
+                self.account_exists(parent_id)?;
+            }
+            AccountType::LedgerAccount {
+                parent_id,
+                currency_id,
+            } => {
+                debug!("adding ledger account with parent id {}", &parent_id);
+                self.account_exists(parent_id)?;
+                self.currency_exists(currency_id)?;
+            }
+            AccountType::EquityAccount {
+                parent_id,
+                currency_id,
+                entity_id,
+            } => {
+                self.account_exists(parent_id)?;
+                self.currency_exists(currency_id)?;
+                self.entity_exists(entity_id)?;
+            }
+            AccountType::BankAccount {
+                parent_id,
+                currency_id,
+                entity_id,
+                ..
+            } => {
+                self.account_exists(parent_id)?;
+                self.currency_exists(currency_id)?;
+                self.entity_exists(entity_id)?;
+            }
+            AccountType::BitcoinAccount { parent_id, .. } => {
+                self.account_exists(parent_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn load_journal(&mut self, journal: &Journal) -> Result<(), Error> {
+        let journal_entries = journal.view()?;
+        self.add_journal_entries(journal_entries)?;
+        Ok(())
+    }
+
+    // add journal entries to ledger collections
+    pub fn add_journal_entries(&mut self, journal_entries: Vec<JournalEntry>) -> Result<(), Error> {
+        for je in journal_entries {
+            if let Err(error) = self.add_journal_entry(je) {
+                error!("Error: {}", error);
+            }
+        }
+        Ok(())
+    }
+
+    // add single journal entry to ledger collections
+    pub fn add_journal_entry(&mut self, journal_entry: JournalEntry) -> Result<(), Error> {
+        match journal_entry {
+            JournalEntry {
+                id: _,
+                version: _,
+                action: AddAccount { account },
+            } => {
+                debug!("insert account: {}", serde_json::to_string(&account)?);
+                self.account_type_valid(&account.account_type)?;
+                self.account_map.insert(account.id, Arc::new(account));
+            }
+            JournalEntry {
+                id: _,
+                version: _,
+                action: AddCurrency { currency },
+            } => {
+                debug!("insert currency: {}", serde_json::to_string(&currency)?);
+                self.currency_map.insert(currency.id, Arc::new(currency));
+            }
+            JournalEntry {
+                id: _,
+                version: _,
+                action: AddEntity { entity },
+            } => match self.entity_map.insert(entity.id, Arc::new(entity.clone())) {
+                None => {
+                    debug!("insert new entity: {}", serde_json::to_string(&entity)?);
+                }
+                Some(old) => {
+                    debug!(
+                        "replace entity old {} with new: {}",
+                        serde_json::to_string(&old)?,
+                        serde_json::to_string(&entity)?
+                    );
+                }
+            },
+            JournalEntry {
+                id: _,
+                version: _,
+                action: AddTransaction { transaction },
+            } => {
+                debug!(
+                    "insert transaction: {}",
+                    serde_json::to_string(&transaction)?
+                );
+                self.transaction_map.insert(transaction.id, Arc::new(transaction));
+            }
+        }
+        Ok(())
     }
 
     pub fn get_parent_id(&self, account: &Account) -> Result<Option<AccountId>, Error> {
@@ -102,7 +213,7 @@ impl Ledger {
         }
     }
 
-    pub fn get_children<'a>(&'a self, account: &'a Account) -> Vec<&Account> {
+    pub fn get_children<'a>(&'a self, account: &'a Arc<Account>) -> Vec<Arc<Account>> {
         self.account_map
             .values()
             .filter(|a| {
@@ -112,10 +223,11 @@ impl Ledger {
                     false
                 }
             })
+            .cloned()
             .collect()
     }
 
-    pub fn get_child_ids<'a>(&'a self, account: &'a Account) -> Vec<AccountId> {
+    pub fn get_child_ids<'a>(&'a self, account: &'a Arc<Account>) -> Vec<AccountId> {
         self.get_children(account).iter().map(|c| c.id).collect()
     }
 
@@ -130,11 +242,27 @@ impl Ledger {
             None => Ok(vec![account.number]),
         }
     }
+
+    pub fn get_accounts(&self) -> Vec<Arc<Account>> {
+        self.account_map.values().cloned().collect()
+    }
+
+    pub fn get_currencies(&self) -> Vec<Arc<Currency>> {
+        self.currency_map.values().cloned().collect()
+    }
+
+    pub fn get_entities(&self) -> Vec<Arc<Entity>> {
+        self.entity_map.values().cloned().collect()
+    }
+
+    pub fn get_transactions(&self) -> Vec<Arc<Transaction>> {
+        self.transaction_map.values().cloned().collect()
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::journal::Action::AddAccount;
+    use crate::journal::Action::{AddAccount, AddEntity};
     use crate::journal::{
         Account, AccountType, AccountValue, Action, Currency, Entity, EntityType,
         FinancialStatement, Journal, JournalEntry, Transaction,
@@ -144,6 +272,8 @@ mod test {
     use rust_decimal::Decimal;
     use time::macros::datetime;
 
+    use crate::Error;
+    use rusty_ulid::Ulid;
     use std::sync::Once;
 
     static INIT: Once = Once::new();
@@ -165,7 +295,8 @@ mod test {
             journal.add(entry.clone()).unwrap();
         }
 
-        let ledger = Ledger::new(&journal).expect("ledger");
+        let mut ledger = Ledger::new();
+        ledger.load_journal(&journal).expect("loaded journal");
 
         assert_eq!(ledger.account_map.len(), 9);
         assert_eq!(ledger.currency_map.len(), 1);
@@ -195,7 +326,8 @@ mod test {
         for entry in &test_data.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
-        let ledger = Ledger::new(&journal).expect("ledger");
+        let mut ledger = Ledger::new();
+        ledger.load_journal(&journal).expect("loaded journal");
 
         for account in &test_data.accounts {
             debug!(
@@ -215,7 +347,8 @@ mod test {
         for entry in &test_data.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
-        let ledger = Ledger::new(&journal).expect("ledger");
+        let mut ledger = Ledger::new();
+        ledger.load_journal(&journal).expect("loaded journal");
 
         for account in &test_data.accounts {
             debug!(
@@ -236,7 +369,8 @@ mod test {
         for entry in &test_data.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
-        let ledger = Ledger::new(&journal).expect("ledger");
+        let mut ledger = Ledger::new();
+        ledger.load_journal(&journal).expect("loaded journal");
 
         for account in &test_data.accounts {
             debug!(
@@ -257,7 +391,8 @@ mod test {
         for entry in &test_data.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
-        let ledger = Ledger::new(&journal).expect("ledger");
+        let mut ledger = Ledger::new();
+        ledger.load_journal(&journal).expect("loaded journal");
 
         for account in &test_data.accounts {
             debug!(
@@ -265,6 +400,79 @@ mod test {
                 account,
                 ledger.get_child_ids(account)
             );
+        }
+    }
+
+    #[test]
+    fn test_add_entity() {
+        setup();
+
+        let test_entity = Entity {
+            id: Ulid::generate(),
+            entity_type: EntityType::Individual,
+            name: "Tester".to_string(),
+            address: None,
+        };
+
+        let test_account = Account {
+            id: Ulid::generate(),
+            number: 10,
+            description: "Valid".to_string(),
+            account_type: AccountType::Organization {
+                parent_id: None,
+                entity_id: test_entity.id.clone(),
+            },
+        };
+
+        let mut ledger = Ledger::new();
+
+        let result = ledger.add_journal_entry(JournalEntry {
+            id: Ulid::generate(),
+            version: 0,
+            action: AddEntity {
+                entity: test_entity.clone(),
+            },
+        });
+
+        debug!("Result: {:?}", result);
+        assert!(result.is_ok());
+
+        let result = ledger.entity_exists(&test_entity.id);
+        debug!("Result: {:?}", result);
+        assert!(result.is_ok());
+
+        let entities = ledger.get_entities();
+        debug!("Entities: {:?}", entities);
+        assert_eq!(entities.len(), 1);
+    }
+
+    #[test]
+    fn test_invalid_account() {
+        setup();
+
+        let test_account = Account {
+            id: Ulid::generate(),
+            number: 10,
+            description: "Invalid".to_string(),
+            account_type: AccountType::Organization {
+                parent_id: Some(Ulid::generate()),
+                entity_id: Ulid::generate(),
+            },
+        };
+
+        let mut ledger = Ledger::new();
+        let result = ledger.add_journal_entry(JournalEntry {
+            id: Ulid::generate(),
+            version: 0,
+            action: AddAccount {
+                account: test_account,
+            },
+        });
+
+        if let Err(e) = result {
+            debug!("Expected validation error: {:?}", e);
+        } else {
+            debug!("Expected ok result");
         }
     }
 
@@ -298,7 +506,7 @@ mod test {
             "Test Organization".to_string(),
             AccountType::Organization {
                 parent_id: None,
-                entity_id: company.entity_id,
+                entity_id: company.id,
             },
         );
         let assets_acct = Account::new(
@@ -347,7 +555,7 @@ mod test {
             AccountType::EquityAccount {
                 parent_id: equity_acct.id,
                 currency_id: usd.id,
-                entity_id: owner.entity_id,
+                entity_id: owner.id,
             },
         );
         let bank_checking_acct = Account::new(
@@ -356,7 +564,7 @@ mod test {
             AccountType::BankAccount {
                 parent_id: assets_acct.id,
                 currency_id: usd.id,
-                entity_id: bank1.entity_id,
+                entity_id: bank1.id,
                 routing: 11111,
                 account: 123123123123,
             },

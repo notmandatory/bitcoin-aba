@@ -31,7 +31,6 @@ impl Journal {
     }
 
     pub fn add(&self, entry: JournalEntry) -> Result<(), Error> {
-        // TODO do validations
         self.db.insert_entry(entry)
     }
 
@@ -67,6 +66,7 @@ impl JournalEntry {
 pub enum Action {
     AddAccount { account: Account },
     AddCurrency { currency: Currency },
+    AddEntity { entity: Entity },
     AddTransaction { transaction: Transaction },
 }
 
@@ -79,13 +79,15 @@ pub type AccountNumber = u32;
 /// Entity id
 pub type EntityId = Ulid;
 
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum EntityType {
     Individual,
     Organization,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Entity {
-    pub entity_id: EntityId,
+    pub id: EntityId,
     pub entity_type: EntityType,
     pub name: String,
     pub address: Option<String>,
@@ -95,7 +97,7 @@ impl Entity {
     pub fn new(entity_type: EntityType, name: String, address: Option<String>) -> Self {
         let id = Ulid::generate();
         Entity {
-            entity_id: id,
+            id,
             entity_type,
             name,
             address,
@@ -140,7 +142,6 @@ pub enum AccountType {
     },
     BitcoinAccount {
         parent_id: AccountId,
-        entity_id: EntityId,
         descriptor: ExtendedDescriptor,
         change_descriptor: Option<ExtendedDescriptor>,
     },
@@ -193,8 +194,7 @@ pub struct Currency {
     pub id: CurrencyId,
     pub code: String,
     pub scale: CurrencyScale,
-    pub name: Option<String>,
-    pub description: Option<String>,
+    pub name: String,
 }
 
 /// Transaction id
@@ -378,7 +378,7 @@ mod test {
             "Test Organization".to_string(),
             AccountType::Organization {
                 parent_id: None,
-                entity_id: org1.entity_id,
+                entity_id: org1.id,
             },
         );
         let assets_acct = Account::new(
@@ -427,7 +427,7 @@ mod test {
             AccountType::EquityAccount {
                 parent_id: equity_acct.id,
                 currency_id: usd.id,
-                entity_id: owner1.entity_id,
+                entity_id: owner1.id,
             },
         );
         let bank_checking_acct = Account::new(
@@ -436,7 +436,7 @@ mod test {
             AccountType::BankAccount {
                 parent_id: assets_acct.id,
                 currency_id: usd.id,
-                entity_id: bank1.entity_id,
+                entity_id: bank1.id,
                 routing: 11111,
                 account: 123123123123,
             },
@@ -498,6 +498,8 @@ mod test {
         });
         entries.push(transaction_entry);
 
+        // sort entries by journal entry ids
+        entries.sort_by(|je1, je2| je1.id.cmp(&je2.id));
         entries
     }
 }

@@ -15,7 +15,7 @@ num_cpus = "1.13"
 r2d2 = "0.8.2"
 r2d2_sqlite = "0.14"
 rusqlite = "0.21"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1.0"
 rusty_ulid = { version = "0.11", features = ["serde"] }
 rust_decimal = "1.19"
