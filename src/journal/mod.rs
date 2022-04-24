@@ -50,8 +50,7 @@ pub struct JournalEntry {
 impl JournalEntry {
     const DEFAULT_VERSION: ApiVersion = 1;
 
-    pub fn new(action: Action) -> Self {
-        let id = Ulid::generate();
+    pub fn new(id: JournalEntryId, action: Action) -> Self {
         let version = JournalEntry::DEFAULT_VERSION;
         JournalEntry {
             id,
@@ -59,14 +58,24 @@ impl JournalEntry {
             action,
         }
     }
+
+    pub fn new_gen_id(action: Action) -> Self {
+        let id = Ulid::generate();
+        JournalEntry::new(id, action)
+    }
+
+    pub fn new_after_id(previous_id: JournalEntryId, action: Action) -> Self {
+        let id = Ulid::next_monotonic(previous_id);
+        JournalEntry::new(id, action)
+    }
 }
 
 /// Journal Entry Action
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum Action {
-    AddAccount { account: Account },
     AddCurrency { currency: Currency },
     AddEntity { entity: Entity },
+    AddAccount { account: Account },
     AddTransaction { transaction: Transaction },
 }
 
@@ -227,6 +236,7 @@ impl Transaction {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum PaymentMethod {
     Bitcoin,
     Ach,
@@ -234,6 +244,7 @@ pub enum PaymentMethod {
     Cash,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum PaymentTerms {
     ImmediatePayment,
     PaymentInAdvance,
@@ -249,6 +260,7 @@ pub enum PaymentTerms {
     },
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum Payment {
     Bitcoin {
         details: TransactionDetails,
@@ -279,6 +291,7 @@ pub enum Payment {
     },
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum TransactionType {
     Invoice {
         payment_method: PaymentMethod,
@@ -326,12 +339,11 @@ impl FromStr for FinancialStatement {
 }
 
 #[cfg(test)]
-mod test {
-    //use log::debug;
-    use crate::journal::Action::AddAccount;
+pub(crate) mod test {
+    use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
     use crate::journal::{
         Account, AccountType, AccountValue, Action, Currency, Entity, EntityType,
-        FinancialStatement, Journal, JournalEntry, Transaction,
+        FinancialStatement, Journal, JournalEntry, JournalEntryId, Transaction,
     };
     use rust_decimal::Decimal;
     use time::macros::datetime;
@@ -340,45 +352,110 @@ mod test {
     fn test_add_view() {
         let journal = Journal::new_mem().expect("journal");
         let test_entries = test_entries();
-        for entry in &test_entries {
+        for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
-        let entries_view = journal.view().unwrap();
-        assert_eq!(entries_view.len(), test_entries.len());
-        for index in 0..test_entries.len() {
+        let journal_view = journal.view().unwrap();
+        let test_journal: Vec<JournalEntry> = test_entries.journal_entries;
+        assert_eq!(journal_view.len(), test_journal.len());
+        for index in 0..test_journal.len() {
             assert_eq!(
-                &entries_view.get(index).unwrap(),
-                &test_entries.get(index).unwrap()
+                &journal_view.get(index).unwrap(),
+                &test_journal.get(index).unwrap()
             );
         }
     }
 
     // utility functions
 
-    pub fn test_entries() -> Vec<JournalEntry> {
+    pub struct TestEntries {
+        pub entities: Vec<Entity>,
+        pub currencies: Vec<Currency>,
+        pub accounts: Vec<Account>,
+        pub transactions: Vec<Transaction>,
+        pub journal_entries: Vec<JournalEntry>,
+    }
+
+    impl TestEntries {
+        fn new(
+            entities: Vec<Entity>,
+            currencies: Vec<Currency>,
+            accounts: Vec<Account>,
+            transactions: Vec<Transaction>,
+        ) -> Self {
+            let mut journal_entries: Vec<JournalEntry> = Vec::new();
+            for entity in entities.clone() {
+                let action = AddEntity {
+                    entity: entity.clone(),
+                };
+                TestEntries::add_journal_entry(&mut journal_entries, action)
+            }
+            for currency in currencies.clone() {
+                let action = AddCurrency {
+                    currency: currency.clone(),
+                };
+                TestEntries::add_journal_entry(&mut journal_entries, action)
+            }
+            for account in accounts.clone() {
+                let action = AddAccount {
+                    account: account.clone(),
+                };
+                TestEntries::add_journal_entry(&mut journal_entries, action)
+            }
+            for transaction in transactions.clone() {
+                let action = AddTransaction {
+                    transaction: transaction.clone(),
+                };
+                TestEntries::add_journal_entry(&mut journal_entries, action)
+            }
+            TestEntries {
+                entities,
+                currencies,
+                accounts,
+                transactions,
+                journal_entries,
+            }
+        }
+
+        fn add_journal_entry(journal_entries: &mut Vec<JournalEntry>, action: Action) {
+            let previous_id = journal_entries
+                .last()
+                .map(|je| je.id)
+                .unwrap_or(JournalEntryId::generate());
+            let je = JournalEntry::new_after_id(previous_id, action);
+            journal_entries.push(je);
+        }
+    }
+
+    pub fn test_entries() -> TestEntries {
+        // Entity
+        let company = Entity::new(EntityType::Organization, "Test Company".to_string(), None);
+        let owner = Entity::new(EntityType::Individual, "Test Owner".to_string(), None);
+        let bank1 = Entity::new(EntityType::Organization, "Test Bank".to_string(), None);
+
+        let entities = vec![company.clone(), owner.clone(), bank1.clone()];
+
         // Currencies
         let usd = Currency {
             id: 840,
             code: "USD".to_string(),
             scale: 2,
-            name: Some("US Dollars".to_string()),
-            description: Some("US Dollar Reserve Notes".to_string()),
+            name: "US Dollars".to_string(),
         };
 
-        // Entities
-        let org1 = Entity::new(EntityType::Organization, "Test Co.".to_string(), None);
-        let owner1 = Entity::new(EntityType::Individual, "Owner One".to_string(), None);
-        let bank1 = Entity::new(EntityType::Organization, "Test Bank".to_string(), None);
+        let currencies = vec![usd.clone()];
 
         // COA entries
+        let company_id = company.id.clone();
         let org_acct = Account::new(
             10,
             "Test Organization".to_string(),
             AccountType::Organization {
                 parent_id: None,
-                entity_id: org1.id,
+                entity_id: company_id,
             },
         );
+
         let assets_acct = Account::new(
             100,
             "Assets".to_string(),
@@ -387,6 +464,7 @@ mod test {
                 parent_id: org_acct.id,
             },
         );
+
         let liabilities_acct = Account::new(
             200,
             "Liabilities".to_string(),
@@ -395,6 +473,7 @@ mod test {
                 parent_id: org_acct.id,
             },
         );
+
         let equity_acct = Account::new(
             300,
             "Equity".to_string(),
@@ -403,6 +482,7 @@ mod test {
                 parent_id: org_acct.id,
             },
         );
+
         let revenue_acct = Account::new(
             400,
             "Revenue".to_string(),
@@ -411,6 +491,7 @@ mod test {
                 parent_id: org_acct.id,
             },
         );
+
         let expenses_acct = Account::new(
             500,
             "Expenses".to_string(),
@@ -419,15 +500,16 @@ mod test {
                 parent_id: org_acct.id,
             },
         );
+
         let owner1_acct = Account::new(
             100,
             "Owner 1".to_string(),
             AccountType::EquityAccount {
                 parent_id: equity_acct.id,
-                currency_id: usd.id,
-                entity_id: owner1.id,
+                entity_id: owner.id,
             },
         );
+
         let bank_checking_acct = Account::new(
             100,
             "Bank Checking".to_string(),
@@ -439,14 +521,15 @@ mod test {
                 account: 123123123123,
             },
         );
+
         let office_supp_acct = Account::new(
             100,
             "Office Supplies".to_string(),
             AccountType::LedgerAccount {
                 parent_id: expenses_acct.id,
-                currency_id: usd.id,
             },
         );
+
         let accounts = vec![
             org_acct,
             assets_acct,
@@ -459,13 +542,7 @@ mod test {
             office_supp_acct,
         ];
 
-        let mut entries: Vec<JournalEntry> = accounts
-            .iter()
-            .map(|a| JournalEntry::new(AddAccount { account: a.clone() }))
-            .collect();
-
         // Test transaction entry
-
         let debits = vec![AccountValue {
             account_id: bank_checking_acct.id.clone(),
             currency_id: usd.id,
@@ -475,8 +552,8 @@ mod test {
 
         let credits = vec![AccountValue {
             account_id: owner1_acct.id.clone(),
-            currency_id: usd.id,
-            amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
+            currency_id: usd.id.clone(),
+            amount: Decimal::new(10_000_00, usd.scale.clone()), // USD 10,000.00
             description: Some("Equity credited to owner".to_string()),
         }];
 
@@ -488,16 +565,8 @@ mod test {
             credits,
         );
 
-        let usd_entry = JournalEntry::new(Action::AddCurrency { currency: usd });
-        entries.push(usd_entry);
+        let transactions = vec![funding_tx.clone()];
 
-        let transaction_entry = JournalEntry::new(Action::AddTransaction {
-            transaction: funding_tx,
-        });
-        entries.push(transaction_entry);
-
-        // sort entries by journal entry ids
-        entries.sort_by(|je1, je2| je1.id.cmp(&je2.id));
-        entries
+        TestEntries::new(entities, currencies, accounts, transactions)
     }
 }

@@ -80,10 +80,7 @@ impl Ledger {
             AccountType::Category { parent_id, .. } => {
                 self.account_exists(parent_id)?;
             }
-            AccountType::LedgerAccount {
-                parent_id,
-            } => {
-                debug!("adding ledger account with parent id {}", &parent_id);
+            AccountType::LedgerAccount { parent_id } => {
                 self.account_exists(parent_id)?;
             }
             AccountType::EquityAccount {
@@ -121,6 +118,7 @@ impl Ledger {
         for je in journal_entries {
             if let Err(error) = self.add_journal_entry(je) {
                 error!("Error: {}", error);
+                panic!()
             }
         }
         Ok(())
@@ -171,7 +169,8 @@ impl Ledger {
                     "insert transaction: {}",
                     serde_json::to_string(&transaction)?
                 );
-                self.transaction_map.insert(transaction.id, Arc::new(transaction));
+                self.transaction_map
+                    .insert(transaction.id, Arc::new(transaction));
             }
         }
         Ok(())
@@ -258,17 +257,16 @@ impl Ledger {
 
 #[cfg(test)]
 mod test {
+    use crate::journal::test::test_entries;
     use crate::journal::Action::{AddAccount, AddEntity};
     use crate::journal::{
-        Account, AccountType, AccountValue, Action, Currency, Entity, EntityType,
-        FinancialStatement, Journal, JournalEntry, Transaction,
+        Account, AccountType, Entity, EntityType,
+        Journal, JournalEntry,
     };
     use crate::ledger::Ledger;
     use log::debug;
-    use rust_decimal::Decimal;
-    use time::macros::datetime;
+    use std::sync::Arc;
 
-    use crate::Error;
     use rusty_ulid::Ulid;
     use std::sync::Once;
 
@@ -286,8 +284,8 @@ mod test {
 
         let journal = Journal::new_mem().expect("journal");
 
-        let test_data = test_data();
-        for entry in &test_data.journal_entries {
+        let test_entries = test_entries();
+        for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
 
@@ -318,14 +316,14 @@ mod test {
         setup();
         let journal = Journal::new_mem().expect("journal");
 
-        let test_data = test_data();
-        for entry in &test_data.journal_entries {
+        let test_entries = test_entries();
+        for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
         let mut ledger = Ledger::new();
         ledger.load_journal(&journal).expect("loaded journal");
 
-        for account in &test_data.accounts {
+        for account in &test_entries.accounts {
             debug!(
                 "account: {:?}, parent: {:?}",
                 account,
@@ -339,14 +337,14 @@ mod test {
         setup();
         let journal = Journal::new_mem().expect("journal");
 
-        let test_data = test_data();
-        for entry in &test_data.journal_entries {
+        let test_entries = test_entries();
+        for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
         let mut ledger = Ledger::new();
         ledger.load_journal(&journal).expect("loaded journal");
 
-        for account in &test_data.accounts {
+        for account in &test_entries.accounts {
             debug!(
                 "account: {:?}, number: {:?}",
                 account,
@@ -361,18 +359,18 @@ mod test {
 
         let journal = Journal::new_mem().expect("journal");
 
-        let test_data = test_data();
-        for entry in &test_data.journal_entries {
+        let test_entries = test_entries();
+        for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
         let mut ledger = Ledger::new();
         ledger.load_journal(&journal).expect("loaded journal");
 
-        for account in &test_data.accounts {
+        for account in &test_entries.accounts {
             debug!(
                 "account: {:?}, children: {:?}",
                 account,
-                ledger.get_children(account)
+                ledger.get_children(&Arc::new(account.clone()))
             );
         }
     }
@@ -383,24 +381,24 @@ mod test {
 
         let journal = Journal::new_mem().expect("journal");
 
-        let test_data = test_data();
-        for entry in &test_data.journal_entries {
+        let test_entries = test_entries();
+        for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
         let mut ledger = Ledger::new();
         ledger.load_journal(&journal).expect("loaded journal");
 
-        for account in &test_data.accounts {
+        for account in &test_entries.accounts {
             debug!(
                 "account: {:?}, children: {:?}",
                 account,
-                ledger.get_child_ids(account)
+                ledger.get_child_ids(&Arc::new(account.clone()))
             );
         }
     }
 
     #[test]
-    fn test_add_entity() {
+    fn test_add_entity_account() {
         setup();
 
         let test_entity = Entity {
@@ -429,17 +427,16 @@ mod test {
                 entity: test_entity.clone(),
             },
         });
-
-        debug!("Result: {:?}", result);
         assert!(result.is_ok());
 
-        let result = ledger.entity_exists(&test_entity.id);
-        debug!("Result: {:?}", result);
+        let result = ledger.add_journal_entry(JournalEntry {
+            id: Ulid::generate(),
+            version:0,
+            action: AddAccount {
+                account: test_account.clone(),
+            }
+        });
         assert!(result.is_ok());
-
-        let entities = ledger.get_entities();
-        debug!("Entities: {:?}", entities);
-        assert_eq!(entities.len(), 1);
     }
 
     #[test]
@@ -469,168 +466,6 @@ mod test {
             debug!("Expected validation error: {:?}", e);
         } else {
             debug!("Expected ok result");
-        }
-    }
-
-    // utility functions
-
-    pub struct TestEntries {
-        pub accounts: Vec<Account>,
-        pub currencies: Vec<Currency>,
-        pub transactions: Vec<Transaction>,
-        pub journal_entries: Vec<JournalEntry>,
-    }
-
-    pub fn test_data() -> TestEntries {
-        // Entity
-        let company = Entity::new(EntityType::Organization, "Test Company".to_string(), None);
-        let owner = Entity::new(EntityType::Individual, "Test Owner".to_string(), None);
-        let bank1 = Entity::new(EntityType::Organization, "Test Bank".to_string(), None);
-
-        // Currencies
-        let usd = Currency {
-            id: 840,
-            code: "USD".to_string(),
-            scale: 2,
-            name: Some("US Dollars".to_string()),
-            description: Some("US Dollar Reserve Notes".to_string()),
-        };
-
-        // COA entries
-        let org_acct = Account::new(
-            10,
-            "Test Organization".to_string(),
-            AccountType::Organization {
-                parent_id: None,
-                entity_id: company.id,
-            },
-        );
-        let assets_acct = Account::new(
-            100,
-            "Assets".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::BalanceSheet,
-                parent_id: org_acct.id,
-            },
-        );
-        let liabilities_acct = Account::new(
-            200,
-            "Liabilities".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::BalanceSheet,
-                parent_id: org_acct.id,
-            },
-        );
-        let equity_acct = Account::new(
-            300,
-            "Equity".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::BalanceSheet,
-                parent_id: org_acct.id,
-            },
-        );
-        let revenue_acct = Account::new(
-            400,
-            "Revenue".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::IncomeStatement,
-                parent_id: org_acct.id,
-            },
-        );
-        let expenses_acct = Account::new(
-            500,
-            "Expenses".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::IncomeStatement,
-                parent_id: org_acct.id,
-            },
-        );
-        let owner1_acct = Account::new(
-            100,
-            "Owner 1".to_string(),
-            AccountType::EquityAccount {
-                parent_id: equity_acct.id,
-                currency_id: usd.id,
-                entity_id: owner.id,
-            },
-        );
-        let bank_checking_acct = Account::new(
-            100,
-            "Bank Checking".to_string(),
-            AccountType::BankAccount {
-                parent_id: assets_acct.id,
-                currency_id: usd.id,
-                entity_id: bank1.id,
-                routing: 11111,
-                account: 123123123123,
-            },
-        );
-        let office_supp_acct = Account::new(
-            100,
-            "Office Supplies".to_string(),
-            AccountType::LedgerAccount {
-                parent_id: expenses_acct.id,
-                currency_id: usd.id,
-            },
-        );
-        let accounts = vec![
-            org_acct,
-            assets_acct,
-            liabilities_acct,
-            equity_acct,
-            revenue_acct,
-            expenses_acct,
-            owner1_acct.clone(),
-            bank_checking_acct.clone(),
-            office_supp_acct,
-        ];
-
-        let mut journal_entries: Vec<JournalEntry> = accounts
-            .iter()
-            .map(|a| JournalEntry::new(AddAccount { account: a.clone() }))
-            .collect();
-
-        // Test transaction entry
-
-        let currencies = vec![usd.clone()];
-
-        let debits = vec![AccountValue {
-            account_id: bank_checking_acct.id.clone(),
-            currency_id: usd.id,
-            amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
-            description: Some("Owner funds deposited to bank".to_string()),
-        }];
-
-        let credits = vec![AccountValue {
-            account_id: owner1_acct.id.clone(),
-            currency_id: usd.id,
-            amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
-            description: Some("Equity credited to owner".to_string()),
-        }];
-
-        let datetime = datetime!(2022-01-03 09:00 UTC);
-        let funding_tx = Transaction::new(
-            datetime,
-            "Owner's initial funding".to_string(),
-            debits,
-            credits,
-        );
-
-        let transactions = vec![funding_tx.clone()];
-
-        let usd_entry = JournalEntry::new(Action::AddCurrency { currency: usd });
-        journal_entries.push(usd_entry);
-
-        let transaction_entry = JournalEntry::new(Action::AddTransaction {
-            transaction: funding_tx,
-        });
-        journal_entries.push(transaction_entry);
-
-        TestEntries {
-            accounts,
-            currencies,
-            transactions,
-            journal_entries,
         }
     }
 }

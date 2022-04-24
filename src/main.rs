@@ -117,7 +117,9 @@ async fn view_ledger_accounts(ledger: web::Data<Mutex<Ledger>>) -> Result<impl R
 }
 
 #[get("/ledger/currencies")]
-async fn view_ledger_currencies(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
+async fn view_ledger_currencies(
+    ledger: web::Data<Mutex<Ledger>>,
+) -> Result<impl Responder, AWError> {
     let currencies_view = ledger.lock().unwrap().get_currencies();
     Ok(web::Json(currencies_view))
 }
@@ -129,7 +131,9 @@ async fn view_ledger_entities(ledger: web::Data<Mutex<Ledger>>) -> Result<impl R
 }
 
 #[get("/ledger/transactions")]
-async fn view_ledger_transactions(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
+async fn view_ledger_transactions(
+    ledger: web::Data<Mutex<Ledger>>,
+) -> Result<impl Responder, AWError> {
     let transactions_view = ledger.lock().unwrap().get_transactions();
     Ok(web::Json(transactions_view))
 }

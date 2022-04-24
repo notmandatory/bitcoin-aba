@@ -71,8 +71,6 @@ impl Db {
 
     fn exec_migrations(conn: &Connection) -> Result<(), Error> {
         let version: SchemaVersion = Db::select_version(conn)?;
-        info!("At version {}", version);
-
         if version == MIGRATIONS.len() as SchemaVersion {
             info!("Up to date, no migration needed");
             return Ok(());
@@ -185,7 +183,7 @@ mod test {
                 entity_id: org.id,
             },
         );
-        let entry = JournalEntry::new(Action::AddAccount { account });
+        let entry = JournalEntry::new_gen_id(Action::AddAccount { account });
 
         db.insert_entry(entry.clone()).unwrap();
         let entries = db.select_entries().unwrap();
