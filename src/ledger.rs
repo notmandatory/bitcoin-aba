@@ -80,7 +80,7 @@ impl Ledger {
             AccountType::Category { parent_id, .. } => {
                 self.account_exists(parent_id)?;
             }
-            AccountType::LedgerAccount { parent_id } => {
+            AccountType::LedgerAccount { parent_id } => { 
                 self.account_exists(parent_id)?;
             }
             AccountType::EquityAccount {
@@ -109,16 +109,15 @@ impl Ledger {
 
     pub fn load_journal(&mut self, journal: &Journal) -> Result<(), Error> {
         let journal_entries = journal.view()?;
-        self.add_journal_entries(journal_entries)?;
-        Ok(())
+        self.add_journal_entries(journal_entries)
     }
 
     // add journal entries to ledger collections
     pub fn add_journal_entries(&mut self, journal_entries: Vec<JournalEntry>) -> Result<(), Error> {
         for je in journal_entries {
             if let Err(error) = self.add_journal_entry(je) {
-                error!("Error: {}", error);
-                panic!()
+                error!("{}", &error);
+                return Err(error)
             }
         }
         Ok(())
