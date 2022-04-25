@@ -44,12 +44,8 @@ impl std::convert::From<serde_json::Error> for Error {
 static MIGRATIONS: &[&str] = &[
     "CREATE TABLE schema_version (version INTEGER NOT NULL)",
     "INSERT INTO schema_version VALUES (1)",
-    "CREATE TABLE table_je_id (name TEXT NOT NULL, je_id TEXT NOT NULL)",
     "CREATE TABLE journal_entry (id TEXT NOT NULL, version INTEGER NOT NULL, action TEXT NOT NULL);",
     "CREATE UNIQUE INDEX idx_journal_entry_id ON journal_entry(id);",
-    "CREATE TABLE account (id TEXT NOT NULL, number INTEGER NOT NULL, description TEXT NOT NULL, type TEXT NOT NULL, parent_id TEXT, statement TEXT, FOREIGN KEY(parent_id) REFERENCES account(id));",
-    "CREATE UNIQUE INDEX idx_account_id ON account(id);",
-    "CREATE UNIQUE INDEX idx_account_parent_number ON account(parent_id, number);",
 ];
 
 impl Db {
