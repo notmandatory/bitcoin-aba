@@ -315,6 +315,7 @@ pub struct AccountValue {
 pub enum FinancialStatement {
     BalanceSheet,
     IncomeStatement,
+    CashFlow,
 }
 
 impl fmt::Display for FinancialStatement {
@@ -322,6 +323,7 @@ impl fmt::Display for FinancialStatement {
         f.write_str(match *self {
             FinancialStatement::BalanceSheet => "BalanceSheet",
             FinancialStatement::IncomeStatement => "IncomeStatement",
+            FinancialStatement::CashFlow => "CashFlow",
         })
     }
 }
