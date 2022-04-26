@@ -1,13 +1,24 @@
 [package]
 name = "bitcoin-aba"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocket = { version = "0.5.0-rc.1", features = ["json"] }
-rocket_sync_db_pools = { version = "0.1.0-rc.1", default-features = false, features = [ "sqlite_pool" ] }
-rusty_ulid = "0.11.0"
-
-flume = "0.10.9"
+actix-web = "3"
+env_logger = "0.9"
+log = "0.4"
+failure = "0.1.7"
+futures = "0.3.1"
+num_cpus = "1.13"
+r2d2 = "0.8.2"
+r2d2_sqlite = "0.14"
+rusqlite = "0.21"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1.0"
+rusty_ulid = { version = "0.11", features = ["serde"] }
+rust_decimal = "1.19"
+rust_decimal_macros = "1.19"
+time = {version = "0.3", features = ["serde-human-readable", "macros"] }
+bdk = "0.17.0"
