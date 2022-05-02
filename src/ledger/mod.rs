@@ -8,6 +8,8 @@ use log::{debug, error};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod report;
+
 #[derive(Clone)]
 pub struct Ledger {
     account_map: BTreeMap<AccountId, Arc<Account>>,
@@ -80,7 +82,7 @@ impl Ledger {
             AccountType::Category { parent_id, .. } => {
                 self.account_exists(parent_id)?;
             }
-            AccountType::LedgerAccount { parent_id } => { 
+            AccountType::LedgerAccount { parent_id } => {
                 self.account_exists(parent_id)?;
             }
             AccountType::EquityAccount {
@@ -117,7 +119,7 @@ impl Ledger {
         for je in journal_entries {
             if let Err(error) = self.add_journal_entry(je) {
                 error!("{}", &error);
-                return Err(error)
+                return Err(error);
             }
         }
         Ok(())
@@ -258,10 +260,7 @@ impl Ledger {
 mod test {
     use crate::journal::test::test_entries;
     use crate::journal::Action::{AddAccount, AddEntity};
-    use crate::journal::{
-        Account, AccountType, Entity, EntityType,
-        Journal, JournalEntry,
-    };
+    use crate::journal::{Account, AccountType, Entity, EntityType, Journal, JournalEntry};
     use crate::ledger::Ledger;
     use log::debug;
     use std::sync::Arc;
@@ -430,10 +429,10 @@ mod test {
 
         let result = ledger.add_journal_entry(JournalEntry {
             id: Ulid::generate(),
-            version:0,
+            version: 0,
             action: AddAccount {
                 account: test_account.clone(),
-            }
+            },
         });
         assert!(result.is_ok());
     }
