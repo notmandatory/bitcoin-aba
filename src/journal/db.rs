@@ -172,12 +172,11 @@ mod test {
 
         let org = Entity::new(EntityType::Organization, "Test Org".to_string(), None);
         let account = Account::new(
+            Some(org.id),
             100,
             "Test account".to_string(),
-            AccountType::Organization {
-                parent_id: None,
-                entity_id: org.id,
-            },
+            AccountType::LedgerAccount,
+            vec![],
         );
         let entry = JournalEntry::new_gen_id(Action::AddAccount { account });
 

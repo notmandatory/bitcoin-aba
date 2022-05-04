@@ -112,7 +112,7 @@ async fn view_journal_entries(
 
 #[get("/ledger/accounts")]
 async fn view_ledger_accounts(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
-    let accounts_view = ledger.lock().unwrap().get_accounts();
+    let accounts_view = ledger.lock().unwrap().accounts();
     Ok(web::Json(accounts_view))
 }
 
@@ -120,13 +120,13 @@ async fn view_ledger_accounts(ledger: web::Data<Mutex<Ledger>>) -> Result<impl R
 async fn view_ledger_currencies(
     ledger: web::Data<Mutex<Ledger>>,
 ) -> Result<impl Responder, AWError> {
-    let currencies_view = ledger.lock().unwrap().get_currencies();
+    let currencies_view = ledger.lock().unwrap().currencies();
     Ok(web::Json(currencies_view))
 }
 
 #[get("/ledger/entities")]
 async fn view_ledger_entities(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
-    let entities_view = ledger.lock().unwrap().get_entities();
+    let entities_view = ledger.lock().unwrap().entities();
     Ok(web::Json(entities_view))
 }
 
@@ -134,6 +134,6 @@ async fn view_ledger_entities(ledger: web::Data<Mutex<Ledger>>) -> Result<impl R
 async fn view_ledger_transactions(
     ledger: web::Data<Mutex<Ledger>>,
 ) -> Result<impl Responder, AWError> {
-    let transactions_view = ledger.lock().unwrap().get_transactions();
+    let transactions_view = ledger.lock().unwrap().transactions();
     Ok(web::Json(transactions_view))
 }

@@ -92,6 +92,7 @@ pub type EntityId = Ulid;
 pub enum EntityType {
     Individual,
     Organization,
+    OrganizationUnit,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
@@ -114,41 +115,22 @@ impl Entity {
     }
 }
 
-// *organization -> *category -> *subaccount
-// *organization -> *organizationunit -> *category -> *subaccount
-// *organization -> *category -> *organizationunit -> *subaccount
-// *organization -> *category -> *subaccount -> *organization -> *subaccount
+// *organization -> *subaccount
+// *organization -> *organizationunit -> *subaccount
+// *organization -> *subaccount -> *organization -> *subaccount
 /// Account type
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum AccountType {
-    Organization {
-        parent_id: Option<AccountId>,
-        entity_id: EntityId,
-    },
-    OrganizationUnit {
-        parent_id: AccountId,
-        entity_id: EntityId,
-    },
-    Category {
-        parent_id: AccountId,
-        statement: FinancialStatement,
-    },
-    LedgerAccount {
-        parent_id: AccountId,
-    },
-    EquityAccount {
-        parent_id: AccountId,
+    LedgerAccount,
+    EntityAccount {
         entity_id: EntityId,
     },
     BankAccount {
-        parent_id: AccountId,
         currency_id: CurrencyId,
-        entity_id: EntityId,
         routing: u32,
         account: u64,
     },
     BitcoinAccount {
-        parent_id: AccountId,
         descriptor: ExtendedDescriptor,
         change_descriptor: Option<ExtendedDescriptor>,
     },
@@ -157,11 +139,8 @@ pub enum AccountType {
 impl fmt::Display for AccountType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match *self {
-            AccountType::Organization { .. } => "Organization",
-            AccountType::OrganizationUnit { .. } => "OrganizationUnit",
-            AccountType::Category { .. } => "Category",
             AccountType::LedgerAccount { .. } => "LedgerAccount",
-            AccountType::EquityAccount { .. } => "EquityAccount",
+            AccountType::EntityAccount { .. } => "EntityAccount",
             AccountType::BankAccount { .. } => "BankAccount",
             AccountType::BitcoinAccount { .. } => "BitcoinAccount",
         })
@@ -172,19 +151,29 @@ impl fmt::Display for AccountType {
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Account {
     pub id: AccountId,
+    pub parent_id: Option<AccountId>,
     pub number: AccountNumber,
     pub description: String,
     pub account_type: AccountType,
+    pub statements: Vec<FinancialStatement>,
 }
 
 impl Account {
-    pub fn new(number: AccountNumber, description: String, account_type: AccountType) -> Self {
+    pub fn new(
+        parent_id: Option<AccountId>,
+        number: AccountNumber,
+        description: String,
+        account_type: AccountType,
+        statements: Vec<FinancialStatement>,
+    ) -> Self {
         let id = Ulid::generate();
         Account {
             id,
+            parent_id,
             number,
             description,
             account_type,
+            statements,
         }
     }
 }
@@ -301,13 +290,19 @@ pub enum TransactionType {
     LedgerAdjustment,
 }
 
-/// Account, currency and value of a debit or credit operation
+/// Account and currency amount of a debit or credit entry
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct AccountValue {
     pub account_id: AccountId,
+    pub currency_amount: CurrencyAmount,
+    pub description: Option<String>,
+}
+
+/// Currency and amount of a debit or credit
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+pub struct CurrencyAmount {
     pub currency_id: CurrencyId,
     pub amount: Decimal,
-    pub description: Option<String>,
 }
 
 /// Financial Statement
@@ -335,6 +330,7 @@ impl FromStr for FinancialStatement {
         match s {
             "BalanceSheet" => Ok(FinancialStatement::BalanceSheet),
             "IncomeStatement" => Ok(FinancialStatement::IncomeStatement),
+            "CashFlow" => Ok(FinancialStatement::CashFlow),
             _ => Err(()),
         }
     }
@@ -343,9 +339,10 @@ impl FromStr for FinancialStatement {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
+    use crate::journal::FinancialStatement::{BalanceSheet, CashFlow, IncomeStatement};
     use crate::journal::{
-        Account, AccountType, AccountValue, Action, Currency, Entity, EntityType,
-        FinancialStatement, Journal, JournalEntry, JournalEntryId, Transaction,
+        Account, AccountType, AccountValue, Action, Currency, CurrencyAmount, Entity, EntityType,
+        Journal, JournalEntry, JournalEntryId, Transaction,
     };
     use rust_decimal::Decimal;
     use time::macros::datetime;
@@ -450,86 +447,83 @@ pub(crate) mod test {
         // COA entries
         let company_id = company.id.clone();
         let org_acct = Account::new(
+            None,
             10,
             "Test Organization".to_string(),
-            AccountType::Organization {
-                parent_id: None,
+            AccountType::EntityAccount {
                 entity_id: company_id,
             },
+            vec![BalanceSheet, IncomeStatement, CashFlow],
         );
 
         let assets_acct = Account::new(
+            Some(org_acct.id),
             100,
             "Assets".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::BalanceSheet,
-                parent_id: org_acct.id,
-            },
+            AccountType::LedgerAccount,
+            vec![BalanceSheet],
         );
 
         let liabilities_acct = Account::new(
+            Some(org_acct.id),
             200,
             "Liabilities".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::BalanceSheet,
-                parent_id: org_acct.id,
-            },
+            AccountType::LedgerAccount,
+            vec![BalanceSheet],
         );
 
         let equity_acct = Account::new(
+            Some(org_acct.id),
             300,
             "Equity".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::BalanceSheet,
-                parent_id: org_acct.id,
-            },
+            AccountType::LedgerAccount,
+            vec![BalanceSheet],
         );
 
         let revenue_acct = Account::new(
+            Some(org_acct.id),
             400,
             "Revenue".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::IncomeStatement,
-                parent_id: org_acct.id,
-            },
+            AccountType::LedgerAccount,
+            vec![IncomeStatement],
         );
 
         let expenses_acct = Account::new(
+            Some(org_acct.id),
             500,
             "Expenses".to_string(),
-            AccountType::Category {
-                statement: FinancialStatement::IncomeStatement,
-                parent_id: org_acct.id,
-            },
+            AccountType::LedgerAccount,
+            vec![IncomeStatement],
         );
 
         let owner1_acct = Account::new(
+            Some(equity_acct.id),
             100,
             "Owner 1".to_string(),
-            AccountType::EquityAccount {
-                parent_id: equity_acct.id,
+            AccountType::EntityAccount {
                 entity_id: owner.id,
             },
+            vec![BalanceSheet],
         );
 
         let bank_checking_acct = Account::new(
+            Some(assets_acct.id),
             100,
             "Bank Checking".to_string(),
             AccountType::BankAccount {
-                parent_id: assets_acct.id,
                 currency_id: usd.id,
-                entity_id: bank1.id,
                 routing: 11111,
                 account: 123123123123,
             },
+            vec![BalanceSheet],
         );
 
         let office_supp_acct = Account::new(
+            Some(expenses_acct.id),
             100,
             "Office Supplies".to_string(),
-            AccountType::LedgerAccount {
-                parent_id: expenses_acct.id,
-            },
+            AccountType::LedgerAccount,
+            vec![IncomeStatement],
         );
 
         let accounts = vec![
@@ -547,15 +541,19 @@ pub(crate) mod test {
         // Test transaction entry
         let debits = vec![AccountValue {
             account_id: bank_checking_acct.id.clone(),
-            currency_id: usd.id,
-            amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
+            currency_amount: CurrencyAmount {
+                currency_id: usd.id,
+                amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
+            },
             description: Some("Owner funds deposited to bank".to_string()),
         }];
 
         let credits = vec![AccountValue {
             account_id: owner1_acct.id.clone(),
-            currency_id: usd.id.clone(),
-            amount: Decimal::new(10_000_00, usd.scale.clone()), // USD 10,000.00
+            currency_amount: CurrencyAmount {
+                currency_id: usd.id,
+                amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
+            },
             description: Some("Equity credited to owner".to_string()),
         }];
 

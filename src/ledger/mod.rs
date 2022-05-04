@@ -8,7 +8,7 @@ use log::{debug, error};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-mod report;
+//mod report;
 
 #[derive(Clone)]
 pub struct Ledger {
@@ -63,50 +63,10 @@ impl Ledger {
 
     pub fn account_type_valid(&self, account_type: &AccountType) -> Result<(), Error> {
         match account_type {
-            AccountType::Organization {
-                parent_id,
-                entity_id,
-            } => {
-                if let Some(parent_id) = parent_id {
-                    self.account_exists(parent_id)?;
-                }
-                self.entity_exists(entity_id)?;
-            }
-            AccountType::OrganizationUnit {
-                parent_id,
-                entity_id,
-            } => {
-                self.account_exists(parent_id)?;
-                self.entity_exists(entity_id)?;
-            }
-            AccountType::Category { parent_id, .. } => {
-                self.account_exists(parent_id)?;
-            }
-            AccountType::LedgerAccount { parent_id } => {
-                self.account_exists(parent_id)?;
-            }
-            AccountType::EquityAccount {
-                parent_id,
-                entity_id,
-            } => {
-                self.account_exists(parent_id)?;
-                self.entity_exists(entity_id)?;
-            }
-            AccountType::BankAccount {
-                parent_id,
-                currency_id,
-                entity_id,
-                ..
-            } => {
-                self.account_exists(parent_id)?;
-                self.currency_exists(currency_id)?;
-                self.entity_exists(entity_id)?;
-            }
-            AccountType::BitcoinAccount { parent_id, .. } => {
-                self.account_exists(parent_id)?;
-            }
+            AccountType::EntityAccount { entity_id } => self.entity_exists(entity_id),
+            AccountType::BankAccount { currency_id, .. } => self.currency_exists(currency_id),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     pub fn load_journal(&mut self, journal: &Journal) -> Result<(), Error> {
@@ -177,26 +137,8 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn get_parent_id(&self, account: &Account) -> Result<Option<AccountId>, Error> {
-        Ok(match account.account_type {
-            AccountType::Organization {
-                parent_id: Some(parent_id),
-                ..
-            } => Some(parent_id),
-            AccountType::Organization {
-                parent_id: None, ..
-            } => None,
-            AccountType::OrganizationUnit { parent_id, .. } => Some(parent_id),
-            AccountType::Category { parent_id, .. } => Some(parent_id),
-            AccountType::LedgerAccount { parent_id, .. } => Some(parent_id),
-            AccountType::EquityAccount { parent_id, .. } => Some(parent_id),
-            AccountType::BankAccount { parent_id, .. } => Some(parent_id),
-            AccountType::BitcoinAccount { parent_id, .. } => Some(parent_id),
-        })
-    }
-
-    pub fn get_parent<'a>(&'a self, account: &'a Account) -> Result<Option<&Account>, Error> {
-        let parent_id: Option<AccountId> = self.get_parent_id(account)?;
+    pub fn parent<'a>(&'a self, account: &'a Account) -> Result<Option<&Account>, Error> {
+        let parent_id: Option<AccountId> = account.parent_id;
         match parent_id {
             Some(id) => {
                 if let Some(account) = self.account_map.get(&id) {
@@ -209,11 +151,11 @@ impl Ledger {
         }
     }
 
-    pub fn get_children<'a>(&'a self, account: &'a Arc<Account>) -> Vec<Arc<Account>> {
+    pub fn children<'a>(&'a self, account: &'a Arc<Account>) -> Vec<Arc<Account>> {
         self.account_map
             .values()
             .filter(|a| {
-                if let Ok(Some(parent_id)) = self.get_parent_id(a) {
+                if let Some(parent_id) = a.parent_id {
                     parent_id == account.id
                 } else {
                     false
@@ -223,15 +165,15 @@ impl Ledger {
             .collect()
     }
 
-    pub fn get_child_ids<'a>(&'a self, account: &'a Arc<Account>) -> Vec<AccountId> {
-        self.get_children(account).iter().map(|c| c.id).collect()
+    pub fn child_ids<'a>(&'a self, account: &'a Arc<Account>) -> Vec<AccountId> {
+        self.children(account).iter().map(|c| c.id).collect()
     }
 
-    pub fn get_full_number(&self, account: &Account) -> Result<Vec<AccountNumber>, Error> {
-        let parent_opt = self.get_parent(account)?;
+    pub fn full_number(&self, account: &Account) -> Result<Vec<AccountNumber>, Error> {
+        let parent_opt = self.parent(account)?;
         match parent_opt {
             Some(parent) => {
-                let mut full_number = self.get_full_number(parent)?;
+                let mut full_number = self.full_number(parent)?;
                 full_number.push(account.number);
                 Ok(full_number)
             }
@@ -239,25 +181,41 @@ impl Ledger {
         }
     }
 
-    pub fn get_accounts(&self) -> Vec<Arc<Account>> {
+    pub fn account(&self, id: &AccountId) -> Option<Arc<Account>> {
+        self.account_map.get(id).cloned()
+    }
+
+    pub fn accounts(&self) -> Vec<Arc<Account>> {
         self.account_map.values().cloned().collect()
     }
 
-    pub fn get_currencies(&self) -> Vec<Arc<Currency>> {
+    pub fn currency(&self, id: &CurrencyId) -> Option<Arc<Currency>> {
+        self.currency_map.get(id).cloned()
+    }
+
+    pub fn currencies(&self) -> Vec<Arc<Currency>> {
         self.currency_map.values().cloned().collect()
     }
 
-    pub fn get_entities(&self) -> Vec<Arc<Entity>> {
+    pub fn entity(&self, id: &EntityId) -> Option<Arc<Entity>> {
+        self.entity_map.get(id).cloned()
+    }
+
+    pub fn entities(&self) -> Vec<Arc<Entity>> {
         self.entity_map.values().cloned().collect()
     }
 
-    pub fn get_transactions(&self) -> Vec<Arc<Transaction>> {
+    pub fn transaction(&self, id: &TransactionId) -> Option<Arc<Transaction>> {
+        self.transaction_map.get(id).cloned()
+    }
+
+    pub fn transactions(&self) -> Vec<Arc<Transaction>> {
         self.transaction_map.values().cloned().collect()
     }
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use crate::journal::test::test_entries;
     use crate::journal::Action::{AddAccount, AddEntity};
     use crate::journal::{Account, AccountType, Entity, EntityType, Journal, JournalEntry};
@@ -265,12 +223,13 @@ mod test {
     use log::debug;
     use std::sync::Arc;
 
+    use crate::journal::FinancialStatement::{BalanceSheet, CashFlow, IncomeStatement};
     use rusty_ulid::Ulid;
     use std::sync::Once;
 
     static INIT: Once = Once::new();
 
-    fn setup() {
+    pub fn setup() {
         INIT.call_once(|| {
             env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"))
         });
@@ -301,7 +260,7 @@ mod test {
         let debit = transaction1.debits.get(0).unwrap();
         let debit_account = ledger.account_map.get(&debit.account_id).unwrap();
         assert_eq!(debit_account.number, 100);
-        if let AccountType::BankAccount { parent_id, .. } = debit_account.account_type {
+        if let Some(parent_id) = debit_account.parent_id {
             let parent_account = ledger.account_map.get(&parent_id).unwrap();
             assert_eq!(parent_account.number, 100);
         } else {
@@ -325,7 +284,7 @@ mod test {
             debug!(
                 "account: {:?}, parent: {:?}",
                 account,
-                ledger.get_parent(account).unwrap()
+                ledger.parent(account).unwrap()
             );
         }
     }
@@ -346,7 +305,7 @@ mod test {
             debug!(
                 "account: {:?}, number: {:?}",
                 account,
-                ledger.get_full_number(account).unwrap()
+                ledger.full_number(account).unwrap()
             );
         }
     }
@@ -368,7 +327,7 @@ mod test {
             debug!(
                 "account: {:?}, children: {:?}",
                 account,
-                ledger.get_children(&Arc::new(account.clone()))
+                ledger.children(&Arc::new(account.clone()))
             );
         }
     }
@@ -390,7 +349,7 @@ mod test {
             debug!(
                 "account: {:?}, children: {:?}",
                 account,
-                ledger.get_child_ids(&Arc::new(account.clone()))
+                ledger.child_ids(&Arc::new(account.clone()))
             );
         }
     }
@@ -408,12 +367,11 @@ mod test {
 
         let test_account = Account {
             id: Ulid::generate(),
+            parent_id: Some(test_entity.id.clone()),
             number: 10,
             description: "Valid".to_string(),
-            account_type: AccountType::Organization {
-                parent_id: None,
-                entity_id: test_entity.id.clone(),
-            },
+            account_type: AccountType::LedgerAccount,
+            statements: vec![BalanceSheet, IncomeStatement, CashFlow],
         };
 
         let mut ledger = Ledger::new();
@@ -443,12 +401,13 @@ mod test {
 
         let test_account = Account {
             id: Ulid::generate(),
+            parent_id: Some(Ulid::generate()),
             number: 10,
             description: "Invalid".to_string(),
-            account_type: AccountType::Organization {
-                parent_id: Some(Ulid::generate()),
+            account_type: AccountType::EntityAccount {
                 entity_id: Ulid::generate(),
             },
+            statements: vec![],
         };
 
         let mut ledger = Ledger::new();
