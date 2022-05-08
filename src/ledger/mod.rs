@@ -1,14 +1,14 @@
 use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
 use crate::journal::{
     Account, AccountId, AccountNumber, AccountType, Currency, CurrencyId, Entity, EntityId,
-    Journal, JournalEntry, Transaction, TransactionId,
+    Journal, JournalEntry, LedgerEntry, Transaction, TransactionId,
 };
 use crate::Error;
 use log::{debug, error};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-//mod report;
+mod report;
 
 #[derive(Clone)]
 pub struct Ledger {
@@ -16,6 +16,8 @@ pub struct Ledger {
     currency_map: BTreeMap<CurrencyId, Arc<Currency>>,
     entity_map: BTreeMap<EntityId, Arc<Entity>>,
     transaction_map: BTreeMap<TransactionId, Arc<Transaction>>,
+    transaction_entries_map: BTreeMap<TransactionId, Vec<Arc<LedgerEntry>>>,
+    account_entries_map: BTreeMap<AccountId, Vec<Arc<LedgerEntry>>>,
 }
 
 impl Ledger {
@@ -24,12 +26,16 @@ impl Ledger {
         let currency_map: BTreeMap<CurrencyId, Arc<Currency>> = BTreeMap::new();
         let entity_map: BTreeMap<EntityId, Arc<Entity>> = BTreeMap::new();
         let transaction_map: BTreeMap<TransactionId, Arc<Transaction>> = BTreeMap::new();
-
+        let transaction_entries_map: BTreeMap<TransactionId, Vec<Arc<LedgerEntry>>> =
+            BTreeMap::new();
+        let account_entries_map: BTreeMap<AccountId, Vec<Arc<LedgerEntry>>> = BTreeMap::new();
         Ledger {
             account_map,
             currency_map,
             entity_map,
             transaction_map,
+            transaction_entries_map,
+            account_entries_map,
         }
     }
 
@@ -124,14 +130,28 @@ impl Ledger {
             JournalEntry {
                 id: _,
                 version: _,
-                action: AddTransaction { transaction },
+                action:
+                    AddTransaction {
+                        transaction,
+                        ledger_entries,
+                    },
             } => {
                 debug!(
-                    "insert transaction: {}",
-                    serde_json::to_string(&transaction)?
+                    "insert transaction: {} with entries {}",
+                    serde_json::to_string(&transaction)?,
+                    serde_json::to_string(&ledger_entries)?
                 );
+                let transaction_id = transaction.id;
                 self.transaction_map
-                    .insert(transaction.id, Arc::new(transaction));
+                    .insert(transaction_id.clone(), Arc::new(transaction));
+                let transaction_entries: Vec<Arc<LedgerEntry>> =
+                    ledger_entries.iter().map(|e| Arc::new(e.clone())).collect();
+                let account_entries: Vec<Arc<LedgerEntry>> =
+                    transaction_entries.iter().cloned().collect();
+                // TODO verify transaction doesn't already exist
+                self.transaction_entries_map
+                    .insert(transaction_id, transaction_entries);
+                self.insert_account_entries(account_entries);
             }
         }
         Ok(())
@@ -181,7 +201,7 @@ impl Ledger {
         }
     }
 
-    pub fn account(&self, id: &AccountId) -> Option<Arc<Account>> {
+    pub fn get_account(&self, id: &AccountId) -> Option<Arc<Account>> {
         self.account_map.get(id).cloned()
     }
 
@@ -189,7 +209,7 @@ impl Ledger {
         self.account_map.values().cloned().collect()
     }
 
-    pub fn currency(&self, id: &CurrencyId) -> Option<Arc<Currency>> {
+    pub fn get_currency(&self, id: &CurrencyId) -> Option<Arc<Currency>> {
         self.currency_map.get(id).cloned()
     }
 
@@ -197,7 +217,7 @@ impl Ledger {
         self.currency_map.values().cloned().collect()
     }
 
-    pub fn entity(&self, id: &EntityId) -> Option<Arc<Entity>> {
+    pub fn get_entity(&self, id: &EntityId) -> Option<Arc<Entity>> {
         self.entity_map.get(id).cloned()
     }
 
@@ -205,12 +225,31 @@ impl Ledger {
         self.entity_map.values().cloned().collect()
     }
 
-    pub fn transaction(&self, id: &TransactionId) -> Option<Arc<Transaction>> {
+    pub fn get_transaction(&self, id: &TransactionId) -> Option<Arc<Transaction>> {
         self.transaction_map.get(id).cloned()
     }
 
     pub fn transactions(&self) -> Vec<Arc<Transaction>> {
         self.transaction_map.values().cloned().collect()
+    }
+
+    pub fn get_account_entries(&self, account_id: &AccountId) -> Option<Vec<Arc<LedgerEntry>>> {
+        self.account_entries_map.get(account_id).cloned()
+    }
+
+    pub fn insert_account_entries(&mut self, entries: Vec<Arc<LedgerEntry>>) {
+        for entry in entries.iter().cloned() {
+            let account_id = &entry.account_id;
+            match self.account_entries_map.get_mut(account_id) {
+                None => {
+                    self.account_entries_map
+                        .insert(entry.account_id, vec![entry]);
+                }
+                Some(account_entries) => {
+                    account_entries.push(entry);
+                }
+            }
+        }
     }
 }
 
@@ -218,7 +257,9 @@ impl Ledger {
 pub(crate) mod test {
     use crate::journal::test::test_entries;
     use crate::journal::Action::{AddAccount, AddEntity};
-    use crate::journal::{Account, AccountType, Entity, EntityType, Journal, JournalEntry};
+    use crate::journal::{
+        Account, AccountType, Entity, EntityType, EntryType, Journal, JournalEntry, LedgerEntry,
+    };
     use crate::ledger::Ledger;
     use log::debug;
     use std::sync::Arc;
@@ -240,7 +281,6 @@ pub(crate) mod test {
         setup();
 
         let journal = Journal::new_mem().expect("journal");
-
         let test_entries = test_entries();
         for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
@@ -249,23 +289,71 @@ pub(crate) mod test {
         let mut ledger = Ledger::new();
         ledger.load_journal(&journal).expect("loaded journal");
 
-        assert_eq!(ledger.account_map.len(), 9);
-        assert_eq!(ledger.currency_map.len(), 1);
-        assert_eq!(ledger.transaction_map.len(), 1);
+        assert_eq!(ledger.account_map.len(), 10);
+        assert_eq!(ledger.currency_map.len(), 2);
+        assert_eq!(ledger.transaction_map.len(), 2);
 
         let transaction1 = ledger.transaction_map.values().next().expect("transaction");
-        assert_eq!(transaction1.credits.len(), 1);
-        assert_eq!(transaction1.debits.len(), 1);
 
-        let debit = transaction1.debits.get(0).unwrap();
-        let debit_account = ledger.account_map.get(&debit.account_id).unwrap();
-        assert_eq!(debit_account.number, 100);
-        if let Some(parent_id) = debit_account.parent_id {
-            let parent_account = ledger.account_map.get(&parent_id).unwrap();
-            assert_eq!(parent_account.number, 100);
-        } else {
-            panic!()
-        }
+        let transaction_entries_len = ledger.transaction_entries_map.len();
+        assert_eq!(transaction_entries_len, test_entries.transactions.len());
+
+        let transactions_len = ledger.transaction_map.len();
+        assert_eq!(transactions_len, test_entries.transactions.len());
+
+        let account_entries_keys_len = ledger.account_entries_map.keys().len();
+        assert_eq!(account_entries_keys_len, 3);
+        let transaction_entries_keys_len = ledger.transaction_entries_map.keys().len();
+        assert_eq!(transaction_entries_keys_len, 2);
+
+        let account_entries_values_len = ledger
+            .account_entries_map
+            .values()
+            .flatten()
+            .collect::<Vec<&Arc<LedgerEntry>>>().len();
+        assert_eq!(account_entries_values_len, 4);
+
+        let transaction_entries_values_len = ledger
+            .transaction_entries_map
+            .values()
+            .flatten()
+            .collect::<Vec<&Arc<LedgerEntry>>>().len();
+        assert_eq!(transaction_entries_values_len, 4);
+
+        let transaction1_entries = ledger
+            .transaction_entries_map
+            .get(&transaction1.id)
+            .expect("transaction1 entries");
+        let transaction1_credits: Vec<&Arc<LedgerEntry>> = transaction1_entries
+            .iter()
+            .filter(|&e| e.entry_type == EntryType::Credit)
+            .collect();
+        assert_eq!(transaction1_credits.len(), 1);
+        let transaction1_debits: Vec<&Arc<LedgerEntry>> = transaction1_entries
+            .iter()
+            .filter(|&e| e.entry_type == EntryType::Debit)
+            .collect();
+        assert_eq!(transaction1_debits.len(), 1);
+
+        // let debit = *transaction1_debits.get(0).unwrap();
+        // let debit_account = ledger.account_map.get(&debit.account_id).unwrap();
+        // assert_eq!(debit_account.number, 100);
+        // if let Some(parent_id) = debit_account.parent_id {
+        //     let parent_account = ledger.account_map.get(&parent_id).unwrap();
+        //     assert_eq!(parent_account.number, 100);
+        // } else {
+        //     panic!()
+        // }
+        //
+        // let credit = *transaction1_credits.get(0).unwrap();
+        // let credit_account = ledger.account_map.get(&credit.account_id).unwrap();
+        // assert_eq!(credit_account.number, 100);
+        // if let Some(parent_id) = credit_account.parent_id {
+        //     let parent_account = ledger.account_map.get(&parent_id).unwrap();
+        //     assert_eq!(parent_account.number, 300);
+        // } else {
+        //     panic!()
+        // }
     }
 
     #[test]
