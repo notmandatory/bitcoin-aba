@@ -1,6 +1,5 @@
 use crate::journal::{
-    Account, AccountId, CurrencyAmount, CurrencyId, EntryType, FinancialStatement,
-    LedgerEntry,
+    Account, AccountId, CurrencyAmount, CurrencyId, EntryType, FinancialStatement, LedgerEntry,
 };
 use crate::ledger::Ledger;
 use rust_decimal::Decimal;
@@ -185,8 +184,9 @@ impl AccountTotals {
 
 #[cfg(test)]
 mod test {
-    use crate::journal::test::test_entries;
-    use crate::journal::{FinancialStatement, Journal};
+    use crate::journal::FinancialStatement;
+    use crate::journal::Journal;
+    use crate::journal::{test_entries, VecDb};
     use crate::ledger::report::Report;
     use crate::ledger::test::setup;
     use crate::ledger::Ledger;
@@ -196,14 +196,17 @@ mod test {
     #[test]
     fn test_balance_sheet() {
         setup();
-        let journal = Journal::new_mem().expect("journal");
+        let db = VecDb::new();
+        let journal = Journal::new(db).expect("journal");
         let test_entries = test_entries();
         for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
 
         let mut ledger = Ledger::new();
-        ledger.load_journal(&journal).expect("loaded journal");
+        ledger
+            .add_journal_entries(journal.view().unwrap())
+            .expect("loaded journal");
 
         let account_id = test_entries.accounts.get(0).expect("first account").id;
         let report = Report::new(
@@ -245,14 +248,17 @@ mod test {
     #[test]
     fn test_income_statement() {
         setup();
-        let journal = Journal::new_mem().expect("journal");
+        let db = VecDb::new();
+        let journal = Journal::new(db).expect("journal");
         let test_entries = test_entries();
         for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
         }
 
         let mut ledger = Ledger::new();
-        ledger.load_journal(&journal).expect("loaded journal");
+        ledger
+            .add_journal_entries(journal.view().unwrap())
+            .expect("loaded journal");
 
         let account_id = test_entries.accounts.get(0).expect("first account").id;
         let report = Report::new(

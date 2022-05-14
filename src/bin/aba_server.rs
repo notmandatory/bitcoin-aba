@@ -8,13 +8,11 @@ use actix_web::{
     ResponseError,
 };
 
-use crate::journal::{Journal, JournalEntry};
-use crate::ledger::Ledger;
+use aba::journal::{Journal, JournalEntry, test_entries};
+use aba::ledger::Ledger;
+use aba::rusty_ulid;
 
-mod journal;
-mod ledger;
-
-type ApiVersion = u16;
+use aba::journal::sqlite::SqliteDb;
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -22,10 +20,8 @@ pub enum Error {
     R2d2(String),
     SerdeJson(String),
     UlidDecoding(rusty_ulid::DecodingError),
-    MissingAccount(journal::AccountId),
-    MissingCurrency(journal::CurrencyId),
-    MissingEntity(journal::EntityId),
-    MissingTransaction(journal::TransactionId),
+    Ledger(aba::ledger::Error),
+    Journal(aba::journal::Error),
 }
 
 impl Display for Error {
@@ -35,11 +31,15 @@ impl Display for Error {
             Self::R2d2(s) => write!(f, "r2d2: {}", s),
             Self::SerdeJson(s) => write!(f, "serde json: {}", s),
             Self::UlidDecoding(d) => write!(f, "ulid decode: {}", d),
-            Self::MissingAccount(a) => write!(f, "missing account: {}", a),
-            Self::MissingCurrency(c) => write!(f, "missing currency: {}", c),
-            Self::MissingEntity(e) => write!(f, "missing entity: {}", e),
-            Self::MissingTransaction(t) => write!(f, "missing transaction: {}", t),
+            Self::Ledger(l) => write!(f, "ledger error: {}", l),
+            Self::Journal(l) => write!(f, "journal error: {}", l),
         }
+    }
+}
+
+impl From<aba::ledger::Error> for Error {
+    fn from(e: aba::ledger::Error) -> Self {
+        Error::Ledger(e)
     }
 }
 
@@ -51,10 +51,14 @@ async fn main() -> io::Result<()> {
 
     // access logs are printed with the INFO level so ensure it is enabled by default
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
-
-    let journal = journal::Journal::new().expect("new journal");
-    let mut ledger = ledger::Ledger::new();
-    ledger.load_journal(&journal).expect("loaded journal");
+    let db = SqliteDb::new().unwrap();
+    let journal = Journal::new(db).expect("new journal");
+    let mut ledger = Ledger::new();
+    let journal_entries = journal.view().expect("journal entries");
+    ledger
+        .add_journal_entries(journal_entries)
+        .expect("ledger loaded");
+    //ledger.load_journal(&journal).expect("loaded journal");
 
     let journal_data_mutex = web::Data::new(Mutex::new(journal));
     let ledger_data_mutex = web::Data::new(Mutex::new(ledger));
@@ -67,6 +71,7 @@ async fn main() -> io::Result<()> {
             .app_data(ledger_data_mutex.clone())
             .wrap(middleware::Logger::default())
             .service(generate_ulid)
+            .service(load_test_journal_entries)
             .service(add_journal_entry)
             .service(view_journal_entries)
             .service(view_ledger_accounts)
@@ -74,49 +79,77 @@ async fn main() -> io::Result<()> {
             .service(view_ledger_entities)
             .service(view_ledger_transactions)
     })
-    .bind("127.0.0.1:8080")?
+    .bind("127.0.0.1:8081")?
     .run()
     .await
 }
 
 /// Generate a new ulid
-#[get("/ulid")]
+#[get("/api/ulid")]
 pub(crate) async fn generate_ulid() -> Result<HttpResponse, AWError> {
     let ulid = rusty_ulid::generate_ulid_string();
     Ok(HttpResponse::Ok().body(ulid))
 }
 
+/// Load test journal entry
+#[post("/api/journal/test")]
+async fn load_test_journal_entries(
+    journal: web::Data<Mutex<Journal<SqliteDb>>>,
+    ledger: web::Data<Mutex<Ledger>>,
+) -> Result<impl Responder, AWError> {
+    debug!("add test entries to ledger");
+    let test_entries = test_entries();
+    ledger
+        .lock()
+        .unwrap()
+        .add_journal_entries(test_entries.journal_entries.clone())
+        .map_err(|e| Error::from(e))?;
+    debug!("add test entries to journal");
+    for entry in test_entries.journal_entries {
+        journal.lock().unwrap().add(entry).unwrap();
+    }
+    Ok(web::HttpResponse::Ok())
+}
+
 /// Create a journal entry
-#[post("/journal")]
+#[post("/api/journal")]
 async fn add_journal_entry(
-    journal: web::Data<Mutex<Journal>>,
+    journal: web::Data<Mutex<Journal<SqliteDb>>>,
     ledger: web::Data<Mutex<Ledger>>,
     entry: web::Json<JournalEntry>,
 ) -> Result<impl Responder, AWError> {
     debug!("update ledger");
-    ledger.lock().unwrap().add_journal_entry(entry.0.clone())?;
+    ledger
+        .lock()
+        .unwrap()
+        .add_journal_entry(entry.0.clone())
+        .map_err(|e| Error::from(e))?;
     debug!("add new journal entry = {:?}", entry.0);
     journal.lock().unwrap().add(entry.0).unwrap();
     Ok(web::HttpResponse::Ok())
 }
 
-#[get("/journal")]
+#[get("/api/journal")]
 async fn view_journal_entries(
-    journal: web::Data<Mutex<Journal>>,
+    journal: web::Data<Mutex<Journal<SqliteDb>>>,
 ) -> Result<impl Responder, AWError> {
     debug!("view journal before DB");
-    let journal_view = journal.lock().unwrap().view()?;
+    let journal_view = journal
+        .lock()
+        .unwrap()
+        .view()
+        .map_err(|e| Error::Journal(e))?;
     debug!("view journal entries: {:?}", journal_view);
     Ok(web::Json(journal_view))
 }
 
-#[get("/ledger/accounts")]
+#[get("/api/ledger/accounts")]
 async fn view_ledger_accounts(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
     let accounts_view = ledger.lock().unwrap().accounts();
     Ok(web::Json(accounts_view))
 }
 
-#[get("/ledger/currencies")]
+#[get("/api/ledger/currencies")]
 async fn view_ledger_currencies(
     ledger: web::Data<Mutex<Ledger>>,
 ) -> Result<impl Responder, AWError> {
@@ -124,13 +157,13 @@ async fn view_ledger_currencies(
     Ok(web::Json(currencies_view))
 }
 
-#[get("/ledger/entities")]
+#[get("/api/ledger/entities")]
 async fn view_ledger_entities(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
     let entities_view = ledger.lock().unwrap().entities();
     Ok(web::Json(entities_view))
 }
 
-#[get("/ledger/transactions")]
+#[get("/api/ledger/transactions")]
 async fn view_ledger_transactions(
     ledger: web::Data<Mutex<Ledger>>,
 ) -> Result<impl Responder, AWError> {

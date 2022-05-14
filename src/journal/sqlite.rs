@@ -1,5 +1,6 @@
-use super::JournalEntry;
-use crate::{ApiVersion, Error};
+use crate::journal::Error;
+use crate::journal::{ApiVersion, JournalEntry};
+use crate::{journal, rusty_ulid, serde_json};
 use log::{debug, error, info};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::NO_PARAMS;
@@ -13,60 +14,29 @@ pub type Pool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
 pub type Connection = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
 
 #[derive(Clone)]
-pub struct Db {
+pub struct SqliteDb {
     pool: Pool,
 }
 
-impl std::convert::From<rusqlite::Error> for Error {
-    fn from(err: rusqlite::Error) -> Self {
-        Error::Rusqlite(err.to_string())
-    }
-}
-
-impl std::convert::From<r2d2::Error> for Error {
-    fn from(err: r2d2::Error) -> Self {
-        Error::R2d2(err.to_string())
-    }
-}
-
-impl std::convert::From<rusty_ulid::DecodingError> for Error {
-    fn from(err: rusty_ulid::DecodingError) -> Self {
-        Error::UlidDecoding(err)
-    }
-}
-
-impl std::convert::From<serde_json::Error> for Error {
-    fn from(err: serde_json::Error) -> Self {
-        Error::SerdeJson(err.to_string())
-    }
-}
-
-static MIGRATIONS: &[&str] = &[
-    "CREATE TABLE schema_version (version INTEGER NOT NULL)",
-    "INSERT INTO schema_version VALUES (1)",
-    "CREATE TABLE journal_entry (id TEXT NOT NULL, version INTEGER NOT NULL, action TEXT NOT NULL);",
-    "CREATE UNIQUE INDEX idx_journal_entry_id ON journal_entry(id);",
-];
-
-impl Db {
-    pub fn new() -> Result<Db, Error> {
+impl SqliteDb {
+    pub fn new() -> Result<Self, Error> {
         // Start N db executor actors (N = number of cores avail)
         let manager = SqliteConnectionManager::file("bitcoin-aba.db");
         let pool = Pool::new(manager)?;
-        Db::exec_migrations(&pool.get().expect("connection"))?;
-        Ok(Db { pool })
+        Self::exec_migrations(&pool.get().expect("connection"))?;
+        Ok(Self { pool })
     }
 
-    pub fn new_mem() -> Result<Db, Error> {
+    pub fn new_mem() -> Result<Self, Error> {
         // Start N db executor actors (N = number of cores avail)
         let manager = SqliteConnectionManager::memory();
         let pool = Pool::new(manager)?;
-        Db::exec_migrations(&pool.get().expect("connection"))?;
-        Ok(Db { pool })
+        Self::exec_migrations(&pool.get().expect("connection"))?;
+        Ok(Self { pool })
     }
 
     fn exec_migrations(conn: &Connection) -> Result<(), Error> {
-        let version: SchemaVersion = Db::select_version(conn)?;
+        let version: SchemaVersion = Self::select_version(conn)?;
         if version == MIGRATIONS.len() as SchemaVersion {
             info!("Up to date, no migration needed");
             return Ok(());
@@ -85,7 +55,7 @@ impl Db {
             i += 1;
         }
 
-        Db::update_version(conn, i)?;
+        Self::update_version(conn, i)?;
         Ok(())
     }
 
@@ -120,16 +90,6 @@ impl Db {
         )
     }
 
-    pub fn insert_entry(&self, entry: JournalEntry) -> Result<(), Error> {
-        // rusqlite::Result<usize> {
-        let conn = self.pool.get().expect("connection");
-        conn.execute_named(
-            "INSERT INTO journal_entry (id, version, action) VALUES (:id, :version, :action)",
-            named_params![":id": &entry.id.to_string(), ":version": entry.version, ":action": serde_json::to_string(&entry.action).unwrap()],
-        ).map_err(|e| e.into()).map(|_s| ())
-        // TODO error if result size isn't 1
-    }
-
     fn convert_row_entry(row: &Row) -> Result<JournalEntry, Error> {
         let id = Ulid::from_str(row.get::<_, String>(0)?.as_str())?; //.map_err(|e| Error::from(e))?;
         let version = row.get::<_, ApiVersion>(1)?;
@@ -140,22 +100,67 @@ impl Db {
             action,
         })
     }
+}
+
+impl std::convert::From<rusqlite::Error> for Error {
+    fn from(err: rusqlite::Error) -> Self {
+        Error::Db(err.to_string())
+    }
+}
+
+impl std::convert::From<r2d2::Error> for Error {
+    fn from(err: r2d2::Error) -> Self {
+        Error::Db(err.to_string())
+    }
+}
+
+impl std::convert::From<rusty_ulid::DecodingError> for Error {
+    fn from(err: rusty_ulid::DecodingError) -> Self {
+        Error::UlidDecoding(err.to_string())
+    }
+}
+
+impl std::convert::From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::SerdeJson(err.to_string())
+    }
+}
+
+static MIGRATIONS: &[&str] = &[
+    "CREATE TABLE schema_version (version INTEGER NOT NULL)",
+    "INSERT INTO schema_version VALUES (1)",
+    "CREATE TABLE journal_entry (id TEXT NOT NULL, version INTEGER NOT NULL, action TEXT NOT NULL);",
+    "CREATE UNIQUE INDEX idx_journal_entry_id ON journal_entry(id);",
+];
+
+impl crate::journal::Db for SqliteDb {
+    fn insert_entry(&mut self, entry: JournalEntry) -> Result<(), journal::Error> {
+        // rusqlite::Result<usize> {
+        let conn = self.pool.get().expect("connection");
+        conn.execute_named(
+            "INSERT INTO journal_entry (id, version, action) VALUES (:id, :version, :action)",
+            named_params![":id": &entry.id.to_string(), ":version": entry.version, ":action": serde_json::to_string(&entry.action).unwrap()],
+        ).map_err(|e| journal::Error::Db(e.to_string())).map(|_s| ())
+        // TODO error if result size isn't 1
+    }
 
     // Select entries
-    pub fn select_entries(&self) -> Result<Vec<JournalEntry>, Error> {
+    fn select_entries(&self) -> Result<Vec<JournalEntry>, journal::Error> {
         let conn = self.pool.get().expect("connection");
         let mut stmt = conn
             .prepare("SELECT * FROM journal_entry ORDER BY id")
-            .map_err(Error::from)?;
+            .map_err(Error::from)
+            .map_err(|e| journal::Error::Db(e.to_string()))?;
 
         let entity_rows = stmt
-            .query_and_then(NO_PARAMS, Db::convert_row_entry)
-            .map_err(Error::from)?;
+            .query_and_then(NO_PARAMS, SqliteDb::convert_row_entry)
+            .map_err(Error::from)
+            .map_err(|e| journal::Error::Db(e.to_string()))?;
 
         let mut result = Vec::new();
         for entry in entity_rows {
             //debug!("entry: {:?}", &entry?);
-            result.push(entry?);
+            result.push(entry.map_err(|e| journal::Error::Db(e.to_string()))?);
         }
         Ok(result)
     }
@@ -163,12 +168,12 @@ impl Db {
 
 #[cfg(test)]
 mod test {
-    use crate::journal::db::Db;
-    use crate::journal::{Account, AccountType, Action, Entity, EntityType, JournalEntry};
+    use crate::journal::sqlite::SqliteDb;
+    use crate::journal::{Account, AccountType, Action, Db, Entity, EntityType, JournalEntry};
 
     #[test]
     pub fn test_insert_select() {
-        let db = Db::new_mem().unwrap();
+        let mut db = SqliteDb::new_mem().unwrap();
 
         let org = Entity::new(EntityType::Organization, "Test Org".to_string(), None);
         let account = Account::new(

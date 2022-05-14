@@ -1,46 +1,102 @@
-use crate::{ApiVersion, Error};
-use db::Db;
-
-use bdk::bitcoin::Address;
-use bdk::descriptor::ExtendedDescriptor;
-use bdk::TransactionDetails;
+use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
+use crate::journal::CurrencyCode::{BTC, USD};
+use crate::journal::FinancialStatement::{BalanceSheet, CashFlow, IncomeStatement};
 use rust_decimal::Decimal;
 use rusty_ulid::Ulid;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use time::macros::datetime;
 use time::{Date, OffsetDateTime};
 
-mod db;
+#[cfg(feature = "server")]
+pub mod sqlite;
 
-pub type JournalEntryId = Ulid;
-
-#[derive(Clone)]
-pub struct Journal {
-    db: Db,
+#[derive(Debug, Clone)]
+pub enum Error {
+    Db(String),
+    UlidDecoding(String),
+    SerdeJson(String),
 }
 
-impl Journal {
-    pub fn new() -> Result<Self, Error> {
-        let db = Db::new()?;
-        Ok(Journal { db })
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Db(a) => write!(f, "database: {}", a),
+            Self::UlidDecoding(a) => write!(f, "ulid decoding: {}", a),
+            Self::SerdeJson(a) => write!(f, "serde json: {}", a),
+        }
+    }
+}
+
+/// DB
+
+pub trait Db {
+    // Insert entry
+    fn insert_entry(&mut self, entry: JournalEntry) -> Result<(), Error>;
+
+    // Select entries
+    fn select_entries(&self) -> Result<Vec<JournalEntry>, Error>;
+}
+
+pub struct VecDb {
+    db: Vec<JournalEntry>,
+}
+
+impl VecDb {
+    pub fn new() -> Self {
+        Self { db: Vec::new() }
+    }
+}
+
+impl Db for VecDb {
+    fn insert_entry(&mut self, entry: JournalEntry) -> Result<(), Error> {
+        Ok(self.db.push(entry))
     }
 
-    pub fn new_mem() -> Result<Journal, Error> {
-        let db = Db::new_mem()?;
-        Ok(Journal { db })
+    fn select_entries(&self) -> Result<Vec<JournalEntry>, Error> {
+        let entries = self.db.iter().cloned().collect();
+        Ok(entries)
+    }
+}
+
+/// Journal
+
+#[derive(Clone)]
+pub struct Journal<D>
+where
+    D: Db,
+{
+    db: RefCell<D>,
+}
+
+impl<D> Journal<D>
+where
+    D: Db,
+{
+    pub fn new(db: D) -> Result<Self, Error> {
+        //let db = Db::new()?;
+        Ok(Journal {
+            db: RefCell::new(db),
+        })
     }
 
     pub fn add(&self, entry: JournalEntry) -> Result<(), Error> {
-        self.db.insert_entry(entry)
+        self.db.borrow_mut().insert_entry(entry)
     }
 
     pub fn view(&self) -> Result<Vec<JournalEntry>, Error> {
-        self.db.select_entries()
+        self.db.borrow().select_entries()
     }
 }
 
 /// Journal Entry
+
+pub type JournalEntryId = Ulid;
+pub type ApiVersion = u16;
+
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct JournalEntry {
     pub id: JournalEntryId,
@@ -49,7 +105,7 @@ pub struct JournalEntry {
 }
 
 impl JournalEntry {
-    const DEFAULT_VERSION: ApiVersion = 1;
+    pub const DEFAULT_VERSION: ApiVersion = 1;
 
     pub fn new(id: JournalEntryId, action: Action) -> Self {
         let version = JournalEntry::DEFAULT_VERSION;
@@ -141,8 +197,8 @@ pub enum AccountType {
         account: u64,
     },
     BitcoinAccount {
-        descriptor: ExtendedDescriptor,
-        change_descriptor: Option<ExtendedDescriptor>,
+        descriptor: String,
+        change_descriptor: Option<String>,
     },
 }
 
@@ -247,7 +303,7 @@ impl Transaction {
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum PaymentMethod {
     Bitcoin {
-        address: Address,
+        address: String,
     },
     Ach {
         entity_id: EntityId,
@@ -281,7 +337,7 @@ pub enum PaymentTerms {
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum Payment {
     Bitcoin {
-        details: TransactionDetails,
+        details: String,
     },
     Lightning {
         details: String,
@@ -367,23 +423,288 @@ impl FromStr for FinancialStatement {
     }
 }
 
+// utility functions
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TestEntries {
+    pub entities: Vec<Entity>,
+    pub currencies: Vec<Currency>,
+    pub accounts: Vec<Account>,
+    pub transactions: Vec<(Transaction, Vec<LedgerEntry>)>,
+    pub journal_entries: Vec<JournalEntry>,
+}
+
+impl TestEntries {
+    fn new(
+        entities: Vec<Entity>,
+        currencies: Vec<Currency>,
+        accounts: Vec<Account>,
+        transactions: Vec<(Transaction, Vec<LedgerEntry>)>,
+    ) -> Self {
+        let mut journal_entries: Vec<JournalEntry> = Vec::new();
+        for entity in entities.clone() {
+            let action = AddEntity {
+                entity: entity.clone(),
+            };
+            TestEntries::add_journal_entry(&mut journal_entries, action)
+        }
+        for currency in currencies.clone() {
+            let action = AddCurrency {
+                currency: currency.clone(),
+            };
+            TestEntries::add_journal_entry(&mut journal_entries, action)
+        }
+        for account in accounts.clone() {
+            let action = AddAccount {
+                account: account.clone(),
+            };
+            TestEntries::add_journal_entry(&mut journal_entries, action)
+        }
+        for transaction in transactions.iter().cloned() {
+            let action = AddTransaction {
+                transaction: transaction.0.clone(),
+                ledger_entries: transaction.1.clone(),
+            };
+            TestEntries::add_journal_entry(&mut journal_entries, action)
+        }
+        TestEntries {
+            entities,
+            currencies,
+            accounts,
+            transactions,
+            journal_entries,
+        }
+    }
+
+    fn add_journal_entry(journal_entries: &mut Vec<JournalEntry>, action: Action) {
+        let previous_id = journal_entries
+            .last()
+            .map(|je| je.id)
+            .unwrap_or(JournalEntryId::generate());
+        let je = JournalEntry::new_after_id(previous_id, action);
+        journal_entries.push(je);
+    }
+}
+
+pub fn test_entries() -> TestEntries {
+    // Entity
+    let company = Entity::new(EntityType::Organization, "Test Company".to_string(), None);
+    let owner = Entity::new(EntityType::Individual, "Test Owner".to_string(), None);
+    let bank1 = Entity::new(EntityType::Organization, "Test Bank".to_string(), None);
+
+    let entities = vec![company.clone(), owner.clone(), bank1.clone()];
+
+    // Currencies
+    let usd = Currency {
+        id: USD as u32,
+        code: "USD".to_string(),
+        scale: 2,
+        name: "US Dollars".to_string(),
+    };
+
+    let btc = Currency {
+        id: BTC as u32,
+        code: "BTC".to_string(),
+        scale: 8,
+        name: "Bitcoin".to_string(),
+    };
+
+    let currencies = vec![usd.clone(), btc.clone()];
+
+    // COA entries
+    let company_id = company.id.clone();
+    let org_acct = Account::new(
+        None,
+        10,
+        "Test Organization".to_string(),
+        AccountType::EntityAccount {
+            entity_id: company_id,
+        },
+        vec![BalanceSheet, IncomeStatement, CashFlow],
+    );
+
+    let assets_acct = Account::new(
+        Some(org_acct.id),
+        100,
+        "Assets".to_string(),
+        AccountType::LedgerAccount,
+        vec![BalanceSheet],
+    );
+
+    let liabilities_acct = Account::new(
+        Some(org_acct.id),
+        200,
+        "Liabilities".to_string(),
+        AccountType::LedgerAccount,
+        vec![BalanceSheet],
+    );
+
+    let equity_acct = Account::new(
+        Some(org_acct.id),
+        300,
+        "Equity".to_string(),
+        AccountType::LedgerAccount,
+        vec![BalanceSheet],
+    );
+
+    let revenue_acct = Account::new(
+        Some(org_acct.id),
+        400,
+        "Revenue".to_string(),
+        AccountType::LedgerAccount,
+        vec![IncomeStatement],
+    );
+
+    let expenses_acct = Account::new(
+        Some(org_acct.id),
+        500,
+        "Expenses".to_string(),
+        AccountType::LedgerAccount,
+        vec![IncomeStatement],
+    );
+
+    let owner1_acct = Account::new(
+        Some(equity_acct.id),
+        100,
+        "Owner 1".to_string(),
+        AccountType::EntityAccount {
+            entity_id: owner.id,
+        },
+        vec![BalanceSheet],
+    );
+
+    let bank_checking_acct = Account::new(
+        Some(assets_acct.id),
+        100,
+        "Bank Checking".to_string(),
+        AccountType::BankAccount {
+            currency_id: usd.id,
+            routing: 11111,
+            account: 123123123123,
+        },
+        vec![BalanceSheet],
+    );
+
+    let office_supp_acct = Account::new(
+        Some(expenses_acct.id),
+        100,
+        "Office Supplies".to_string(),
+        AccountType::LedgerAccount,
+        vec![IncomeStatement],
+    );
+
+    let consult_income_acct = Account::new(
+        Some(revenue_acct.id),
+        100,
+        "Consulting Income".to_string(),
+        AccountType::LedgerAccount,
+        vec![IncomeStatement],
+    );
+
+    let accounts = vec![
+        org_acct,
+        assets_acct,
+        liabilities_acct,
+        equity_acct,
+        revenue_acct,
+        expenses_acct,
+        owner1_acct.clone(),
+        bank_checking_acct.clone(),
+        office_supp_acct,
+        consult_income_acct.clone(),
+    ];
+
+    // Test funding transaction
+    let datetime = datetime!(2022-01-03 09:00 UTC);
+    let funding_tx = Transaction::new(
+        datetime,
+        "Owner's initial funding".to_string(),
+        TransactionType::Invoice {
+            payment_method: PaymentMethod::Cash,
+            payment_terms: PaymentTerms::ImmediatePayment,
+            payments: vec![],
+        },
+    );
+
+    let funding_debits = vec![LedgerEntry {
+        transaction_id: funding_tx.id.clone(),
+        entry_type: EntryType::Debit,
+        account_id: bank_checking_acct.id.clone(),
+        currency_amount: CurrencyAmount {
+            currency_id: usd.id,
+            amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
+        },
+        description: Some("Owner funds deposited to bank".to_string()),
+    }];
+
+    let funding_credits = vec![LedgerEntry {
+        transaction_id: funding_tx.id.clone(),
+        entry_type: EntryType::Credit,
+        account_id: owner1_acct.id.clone(),
+        currency_amount: CurrencyAmount {
+            currency_id: usd.id,
+            amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
+        },
+        description: Some("Equity credited to owner".to_string()),
+    }];
+
+    // Test income transaction
+    let datetime = datetime!(2022-02-03 09:00 UTC);
+    let income_tx = Transaction::new(
+        datetime,
+        "Consulting income".to_string(),
+        TransactionType::Invoice {
+            payment_method: PaymentMethod::Check {
+                entity_id: company_id,
+                currency_id: USD as u32,
+            },
+            payment_terms: PaymentTerms::ImmediatePayment,
+            payments: vec![],
+        },
+    );
+
+    let income_debits = vec![LedgerEntry {
+        transaction_id: income_tx.id.clone(),
+        entry_type: EntryType::Debit,
+        account_id: bank_checking_acct.id.clone(),
+        currency_amount: CurrencyAmount {
+            currency_id: usd.id,
+            amount: Decimal::new(800000, usd.scale), // USD 8,000.00
+        },
+        description: Some("Consulting fee deposit".to_string()),
+    }];
+
+    let income_credits = vec![LedgerEntry {
+        transaction_id: income_tx.id.clone(),
+        entry_type: EntryType::Credit,
+        account_id: consult_income_acct.id.clone(),
+        currency_amount: CurrencyAmount {
+            currency_id: usd.id,
+            amount: Decimal::new(800000, usd.scale), // USD 8,000.00
+        },
+        description: Some("Consulting services".to_string()),
+    }];
+
+    let transactions: Vec<(Transaction, Vec<LedgerEntry>)> = vec![
+        (
+            funding_tx.clone(),
+            [funding_debits, funding_credits].concat(),
+        ),
+        (income_tx.clone(), [income_debits, income_credits].concat()),
+    ];
+
+    TestEntries::new(entities, currencies, accounts, transactions)
+}
+
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
-    use crate::journal::CurrencyCode::{BTC, USD};
-    use crate::journal::FinancialStatement::{BalanceSheet, CashFlow, IncomeStatement};
-    use crate::journal::{
-        Account, AccountType, Action, Currency, CurrencyAmount, Entity, EntityType, EntryType,
-        Journal, JournalEntry, JournalEntryId, LedgerEntry, PaymentMethod, PaymentTerms,
-        Transaction, TransactionType,
-    };
-    use rust_decimal::Decimal;
-    use serde::{Deserialize, Serialize};
-    use time::macros::datetime;
+    use crate::journal::{test_entries, Journal, JournalEntry, VecDb};
+    use crate::{Journal, SqliteDb};
+    use aba::journal::{test_entries, JournalEntry, VecDb};
 
     #[test]
     fn test_add_view() {
-        let journal = Journal::new_mem().expect("journal");
+        let db = VecDb::new();
+        let journal = Journal::new(db).expect("journal");
         let test_entries = test_entries();
         for entry in &test_entries.journal_entries {
             journal.add(entry.clone()).unwrap();
@@ -397,272 +718,5 @@ pub(crate) mod test {
                 &test_journal.get(index).unwrap()
             );
         }
-    }
-
-    // utility functions
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    pub struct TestEntries {
-        pub entities: Vec<Entity>,
-        pub currencies: Vec<Currency>,
-        pub accounts: Vec<Account>,
-        pub transactions: Vec<(Transaction, Vec<LedgerEntry>)>,
-        pub journal_entries: Vec<JournalEntry>,
-    }
-
-    impl TestEntries {
-        fn new(
-            entities: Vec<Entity>,
-            currencies: Vec<Currency>,
-            accounts: Vec<Account>,
-            transactions: Vec<(Transaction,Vec<LedgerEntry>)>,
-        ) -> Self {
-            let mut journal_entries: Vec<JournalEntry> = Vec::new();
-            for entity in entities.clone() {
-                let action = AddEntity {
-                    entity: entity.clone(),
-                };
-                TestEntries::add_journal_entry(&mut journal_entries, action)
-            }
-            for currency in currencies.clone() {
-                let action = AddCurrency {
-                    currency: currency.clone(),
-                };
-                TestEntries::add_journal_entry(&mut journal_entries, action)
-            }
-            for account in accounts.clone() {
-                let action = AddAccount {
-                    account: account.clone(),
-                };
-                TestEntries::add_journal_entry(&mut journal_entries, action)
-            }
-            for transaction in transactions.iter().cloned() {
-                let action = AddTransaction {
-                    transaction: transaction.0.clone(),
-                    ledger_entries: transaction.1.clone(),
-                };
-                TestEntries::add_journal_entry(&mut journal_entries, action)
-            }
-            TestEntries {
-                entities,
-                currencies,
-                accounts,
-                transactions,
-                journal_entries,
-            }
-        }
-
-        fn add_journal_entry(journal_entries: &mut Vec<JournalEntry>, action: Action) {
-            let previous_id = journal_entries
-                .last()
-                .map(|je| je.id)
-                .unwrap_or(JournalEntryId::generate());
-            let je = JournalEntry::new_after_id(previous_id, action);
-            journal_entries.push(je);
-        }
-    }
-
-    pub fn test_entries() -> TestEntries {
-        // Entity
-        let company = Entity::new(EntityType::Organization, "Test Company".to_string(), None);
-        let owner = Entity::new(EntityType::Individual, "Test Owner".to_string(), None);
-        let bank1 = Entity::new(EntityType::Organization, "Test Bank".to_string(), None);
-
-        let entities = vec![company.clone(), owner.clone(), bank1.clone()];
-
-        // Currencies
-        let usd = Currency {
-            id: USD as u32,
-            code: "USD".to_string(),
-            scale: 2,
-            name: "US Dollars".to_string(),
-        };
-
-        let btc = Currency {
-            id: BTC as u32,
-            code: "BTC".to_string(),
-            scale: 8,
-            name: "Bitcoin".to_string(),
-        };
-
-        let currencies = vec![usd.clone(), btc.clone()];
-
-        // COA entries
-        let company_id = company.id.clone();
-        let org_acct = Account::new(
-            None,
-            10,
-            "Test Organization".to_string(),
-            AccountType::EntityAccount {
-                entity_id: company_id,
-            },
-            vec![BalanceSheet, IncomeStatement, CashFlow],
-        );
-
-        let assets_acct = Account::new(
-            Some(org_acct.id),
-            100,
-            "Assets".to_string(),
-            AccountType::LedgerAccount,
-            vec![BalanceSheet],
-        );
-
-        let liabilities_acct = Account::new(
-            Some(org_acct.id),
-            200,
-            "Liabilities".to_string(),
-            AccountType::LedgerAccount,
-            vec![BalanceSheet],
-        );
-
-        let equity_acct = Account::new(
-            Some(org_acct.id),
-            300,
-            "Equity".to_string(),
-            AccountType::LedgerAccount,
-            vec![BalanceSheet],
-        );
-
-        let revenue_acct = Account::new(
-            Some(org_acct.id),
-            400,
-            "Revenue".to_string(),
-            AccountType::LedgerAccount,
-            vec![IncomeStatement],
-        );
-
-        let expenses_acct = Account::new(
-            Some(org_acct.id),
-            500,
-            "Expenses".to_string(),
-            AccountType::LedgerAccount,
-            vec![IncomeStatement],
-        );
-
-        let owner1_acct = Account::new(
-            Some(equity_acct.id),
-            100,
-            "Owner 1".to_string(),
-            AccountType::EntityAccount {
-                entity_id: owner.id,
-            },
-            vec![BalanceSheet],
-        );
-
-        let bank_checking_acct = Account::new(
-            Some(assets_acct.id),
-            100,
-            "Bank Checking".to_string(),
-            AccountType::BankAccount {
-                currency_id: usd.id,
-                routing: 11111,
-                account: 123123123123,
-            },
-            vec![BalanceSheet],
-        );
-
-        let office_supp_acct = Account::new(
-            Some(expenses_acct.id),
-            100,
-            "Office Supplies".to_string(),
-            AccountType::LedgerAccount,
-            vec![IncomeStatement],
-        );
-
-        let consult_income_acct = Account::new(
-            Some(revenue_acct.id),
-            100,
-            "Consulting Income".to_string(),
-            AccountType::LedgerAccount,
-            vec![IncomeStatement],
-        );
-
-        let accounts = vec![
-            org_acct,
-            assets_acct,
-            liabilities_acct,
-            equity_acct,
-            revenue_acct,
-            expenses_acct,
-            owner1_acct.clone(),
-            bank_checking_acct.clone(),
-            office_supp_acct,
-            consult_income_acct.clone(),
-        ];
-
-        // Test funding transaction
-        let datetime = datetime!(2022-01-03 09:00 UTC);
-        let funding_tx = Transaction::new(
-            datetime,
-            "Owner's initial funding".to_string(),
-            TransactionType::Invoice {
-                payment_method: PaymentMethod::Cash,
-                payment_terms: PaymentTerms::ImmediatePayment,
-                payments: vec![],
-            },
-        );
-
-        let funding_debits = vec![LedgerEntry {
-            transaction_id: funding_tx.id.clone(),
-            entry_type: EntryType::Debit,
-            account_id: bank_checking_acct.id.clone(),
-            currency_amount: CurrencyAmount {
-                currency_id: usd.id,
-                amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
-            },
-            description: Some("Owner funds deposited to bank".to_string()),
-        }];
-
-        let funding_credits = vec![LedgerEntry {
-            transaction_id: funding_tx.id.clone(),
-            entry_type: EntryType::Credit,
-            account_id: owner1_acct.id.clone(),
-            currency_amount: CurrencyAmount {
-                currency_id: usd.id,
-                amount: Decimal::new(10_000_00, usd.scale), // USD 10,000.00
-            },
-            description: Some("Equity credited to owner".to_string()),
-        }];
-
-        // Test income transaction
-        let datetime = datetime!(2022-02-03 09:00 UTC);
-        let income_tx = Transaction::new(
-            datetime,
-            "Consulting income".to_string(),
-            TransactionType::Invoice {
-                payment_method: PaymentMethod::Check {
-                    entity_id: company_id,
-                    currency_id: USD as u32,
-                },
-                payment_terms: PaymentTerms::ImmediatePayment,
-                payments: vec![],
-            },
-        );
-
-        let income_debits = vec![LedgerEntry {
-            transaction_id: income_tx.id.clone(),
-            entry_type: EntryType::Debit,
-            account_id: bank_checking_acct.id.clone(),
-            currency_amount: CurrencyAmount {
-                currency_id: usd.id,
-                amount: Decimal::new(800000, usd.scale), // USD 8,000.00
-            },
-            description: Some("Consulting fee deposit".to_string()),
-        }];
-
-        let income_credits = vec![LedgerEntry {
-            transaction_id: income_tx.id.clone(),
-            entry_type: EntryType::Credit,
-            account_id: consult_income_acct.id.clone(),
-            currency_amount: CurrencyAmount {
-                currency_id: usd.id,
-                amount: Decimal::new(800000, usd.scale), // USD 8,000.00
-            },
-            description: Some("Consulting services".to_string()),
-        }];
-
-        let transactions:Vec<(Transaction,Vec<LedgerEntry>)> = vec![(funding_tx.clone(),[funding_debits,funding_credits].concat()),
-                                (income_tx.clone(),[income_debits, income_credits].concat())];
-
-        TestEntries::new(entities, currencies, accounts, transactions)
     }
 }

@@ -1,14 +1,34 @@
 use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
 use crate::journal::{
     Account, AccountId, AccountNumber, AccountType, Currency, CurrencyId, Entity, EntityId,
-    Journal, JournalEntry, LedgerEntry, Transaction, TransactionId,
+    JournalEntry, LedgerEntry, Transaction, TransactionId,
 };
-use crate::Error;
-use log::{debug, error};
+
+use log::error;
 use std::collections::BTreeMap;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-mod report;
+pub mod report;
+
+#[derive(Debug, Clone)]
+pub enum Error {
+    MissingAccount(AccountId),
+    MissingCurrency(CurrencyId),
+    MissingEntity(EntityId),
+    MissingTransaction(TransactionId),
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingAccount(a) => write!(f, "missing account: {}", a),
+            Self::MissingCurrency(c) => write!(f, "missing currency: {}", c),
+            Self::MissingEntity(e) => write!(f, "missing entity: {}", e),
+            Self::MissingTransaction(t) => write!(f, "missing transaction: {}", t),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Ledger {
@@ -75,11 +95,6 @@ impl Ledger {
         }
     }
 
-    pub fn load_journal(&mut self, journal: &Journal) -> Result<(), Error> {
-        let journal_entries = journal.view()?;
-        self.add_journal_entries(journal_entries)
-    }
-
     // add journal entries to ledger collections
     pub fn add_journal_entries(&mut self, journal_entries: Vec<JournalEntry>) -> Result<(), Error> {
         for je in journal_entries {
@@ -99,7 +114,7 @@ impl Ledger {
                 version: _,
                 action: AddAccount { account },
             } => {
-                debug!("insert account: {}", serde_json::to_string(&account)?);
+                //debug!("insert account: {}", serde_json::to_string(&account)?);
                 self.account_type_valid(&account.account_type)?;
                 self.account_map.insert(account.id, Arc::new(account));
             }
@@ -108,7 +123,7 @@ impl Ledger {
                 version: _,
                 action: AddCurrency { currency },
             } => {
-                debug!("insert currency: {}", serde_json::to_string(&currency)?);
+                //debug!("insert currency: {}", serde_json::to_string(&currency)?);
                 self.currency_map.insert(currency.id, Arc::new(currency));
             }
             JournalEntry {
@@ -117,14 +132,14 @@ impl Ledger {
                 action: AddEntity { entity },
             } => match self.entity_map.insert(entity.id, Arc::new(entity.clone())) {
                 None => {
-                    debug!("insert new entity: {}", serde_json::to_string(&entity)?);
+                    //debug!("insert new entity: {}", serde_json::to_string(&entity)?);
                 }
-                Some(old) => {
-                    debug!(
-                        "replace entity old {} with new: {}",
-                        serde_json::to_string(&old)?,
-                        serde_json::to_string(&entity)?
-                    );
+                Some(_old) => {
+                    // debug!(
+                    //     "replace entity old {} with new: {}",
+                    //     serde_json::to_string(&old)?,
+                    //     serde_json::to_string(&entity)?
+                    // );
                 }
             },
             JournalEntry {
@@ -136,11 +151,11 @@ impl Ledger {
                         ledger_entries,
                     },
             } => {
-                debug!(
-                    "insert transaction: {} with entries {}",
-                    serde_json::to_string(&transaction)?,
-                    serde_json::to_string(&ledger_entries)?
-                );
+                // debug!(
+                //     "insert transaction: {} with entries {}",
+                //     serde_json::to_string(&transaction)?,
+                //     serde_json::to_string(&ledger_entries)?
+                // );
                 let transaction_id = transaction.id;
                 self.transaction_map
                     .insert(transaction_id.clone(), Arc::new(transaction));
@@ -255,10 +270,10 @@ impl Ledger {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::journal::test::test_entries;
+    use crate::journal::test_entries;
     use crate::journal::Action::{AddAccount, AddEntity};
     use crate::journal::{
-        Account, AccountType, Entity, EntityType, EntryType, Journal, JournalEntry, LedgerEntry,
+        Account, AccountType, Entity, EntityType, EntryType, JournalEntry, LedgerEntry,
     };
     use crate::ledger::Ledger;
     use log::debug;
@@ -279,15 +294,11 @@ pub(crate) mod test {
     #[test]
     fn test_new_get() {
         setup();
-
-        let journal = Journal::new_mem().expect("journal");
         let test_entries = test_entries();
-        for entry in &test_entries.journal_entries {
-            journal.add(entry.clone()).unwrap();
-        }
-
         let mut ledger = Ledger::new();
-        ledger.load_journal(&journal).expect("loaded journal");
+        ledger
+            .add_journal_entries(test_entries.journal_entries)
+            .expect("loaded journal");
 
         assert_eq!(ledger.account_map.len(), 10);
         assert_eq!(ledger.currency_map.len(), 2);
@@ -310,14 +321,16 @@ pub(crate) mod test {
             .account_entries_map
             .values()
             .flatten()
-            .collect::<Vec<&Arc<LedgerEntry>>>().len();
+            .collect::<Vec<&Arc<LedgerEntry>>>()
+            .len();
         assert_eq!(account_entries_values_len, 4);
 
         let transaction_entries_values_len = ledger
             .transaction_entries_map
             .values()
             .flatten()
-            .collect::<Vec<&Arc<LedgerEntry>>>().len();
+            .collect::<Vec<&Arc<LedgerEntry>>>()
+            .len();
         assert_eq!(transaction_entries_values_len, 4);
 
         let transaction1_entries = ledger
@@ -359,14 +372,11 @@ pub(crate) mod test {
     #[test]
     fn test_get_parent() {
         setup();
-        let journal = Journal::new_mem().expect("journal");
-
         let test_entries = test_entries();
-        for entry in &test_entries.journal_entries {
-            journal.add(entry.clone()).unwrap();
-        }
         let mut ledger = Ledger::new();
-        ledger.load_journal(&journal).expect("loaded journal");
+        ledger
+            .add_journal_entries(test_entries.journal_entries)
+            .expect("loaded journal");
 
         for account in &test_entries.accounts {
             debug!(
@@ -380,14 +390,11 @@ pub(crate) mod test {
     #[test]
     fn test_get_full_number() {
         setup();
-        let journal = Journal::new_mem().expect("journal");
-
         let test_entries = test_entries();
-        for entry in &test_entries.journal_entries {
-            journal.add(entry.clone()).unwrap();
-        }
         let mut ledger = Ledger::new();
-        ledger.load_journal(&journal).expect("loaded journal");
+        ledger
+            .add_journal_entries(test_entries.journal_entries)
+            .expect("loaded journal");
 
         for account in &test_entries.accounts {
             debug!(
@@ -401,15 +408,11 @@ pub(crate) mod test {
     #[test]
     fn test_get_children() {
         setup();
-
-        let journal = Journal::new_mem().expect("journal");
-
         let test_entries = test_entries();
-        for entry in &test_entries.journal_entries {
-            journal.add(entry.clone()).unwrap();
-        }
         let mut ledger = Ledger::new();
-        ledger.load_journal(&journal).expect("loaded journal");
+        ledger
+            .add_journal_entries(test_entries.journal_entries)
+            .expect("loaded journal");
 
         for account in &test_entries.accounts {
             debug!(
@@ -423,15 +426,11 @@ pub(crate) mod test {
     #[test]
     fn test_get_child_ids() {
         setup();
-
-        let journal = Journal::new_mem().expect("journal");
-
         let test_entries = test_entries();
-        for entry in &test_entries.journal_entries {
-            journal.add(entry.clone()).unwrap();
-        }
         let mut ledger = Ledger::new();
-        ledger.load_journal(&journal).expect("loaded journal");
+        ledger
+            .add_journal_entries(test_entries.journal_entries)
+            .expect("loaded journal");
 
         for account in &test_entries.accounts {
             debug!(
