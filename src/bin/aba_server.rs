@@ -7,8 +7,9 @@ use actix_web::{
     get, middleware, post, web, App, Error as AWError, HttpResponse, HttpServer, Responder,
     ResponseError,
 };
+use actix_web_static_files::ResourceFiles;
 
-use aba::journal::{Journal, JournalEntry, test_entries};
+use aba::journal::{test_entries, Journal, JournalEntry};
 use aba::ledger::Ledger;
 use aba::rusty_ulid;
 
@@ -45,6 +46,8 @@ impl From<aba::ledger::Error> for Error {
 
 impl ResponseError for Error {}
 
+include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+
 #[actix_web::main]
 async fn main() -> io::Result<()> {
     //std::env::set_var("RUST_LOG", "actix_web=info");
@@ -65,19 +68,24 @@ async fn main() -> io::Result<()> {
 
     // Start http server
     HttpServer::new(move || {
+        let generated = generate();
         App::new()
-            // store journal db as Data object
-            .app_data(journal_data_mutex.clone())
-            .app_data(ledger_data_mutex.clone())
-            .wrap(middleware::Logger::default())
-            .service(generate_ulid)
-            .service(load_test_journal_entries)
-            .service(add_journal_entry)
-            .service(view_journal_entries)
-            .service(view_ledger_accounts)
-            .service(view_ledger_currencies)
-            .service(view_ledger_entities)
-            .service(view_ledger_transactions)
+            .service(
+                web::scope("/api")
+                    // store journal db as Data object
+                    .app_data(journal_data_mutex.clone())
+                    .app_data(ledger_data_mutex.clone())
+                    .wrap(middleware::Logger::default())
+                    .service(generate_ulid)
+                    .service(load_test_journal_entries)
+                    .service(add_journal_entry)
+                    .service(view_journal_entries)
+                    .service(view_ledger_accounts)
+                    .service(view_ledger_currencies)
+                    .service(view_ledger_entities)
+                    .service(view_ledger_transactions),
+            )
+            .service(ResourceFiles::new("/", generated))
     })
     .bind("127.0.0.1:8081")?
     .run()
@@ -92,7 +100,7 @@ pub(crate) async fn generate_ulid() -> Result<HttpResponse, AWError> {
 }
 
 /// Load test journal entry
-#[post("/api/journal/test")]
+#[post("/journal/test")]
 async fn load_test_journal_entries(
     journal: web::Data<Mutex<Journal<SqliteDb>>>,
     ledger: web::Data<Mutex<Ledger>>,
@@ -108,11 +116,11 @@ async fn load_test_journal_entries(
     for entry in test_entries.journal_entries {
         journal.lock().unwrap().add(entry).unwrap();
     }
-    Ok(web::HttpResponse::Ok())
+    Ok(HttpResponse::Ok())
 }
 
 /// Create a journal entry
-#[post("/api/journal")]
+#[post("/journal")]
 async fn add_journal_entry(
     journal: web::Data<Mutex<Journal<SqliteDb>>>,
     ledger: web::Data<Mutex<Ledger>>,
@@ -126,10 +134,10 @@ async fn add_journal_entry(
         .map_err(|e| Error::from(e))?;
     debug!("add new journal entry = {:?}", entry.0);
     journal.lock().unwrap().add(entry.0).unwrap();
-    Ok(web::HttpResponse::Ok())
+    Ok(HttpResponse::Ok())
 }
 
-#[get("/api/journal")]
+#[get("/journal")]
 async fn view_journal_entries(
     journal: web::Data<Mutex<Journal<SqliteDb>>>,
 ) -> Result<impl Responder, AWError> {
@@ -143,13 +151,13 @@ async fn view_journal_entries(
     Ok(web::Json(journal_view))
 }
 
-#[get("/api/ledger/accounts")]
+#[get("/ledger/accounts")]
 async fn view_ledger_accounts(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
     let accounts_view = ledger.lock().unwrap().accounts();
     Ok(web::Json(accounts_view))
 }
 
-#[get("/api/ledger/currencies")]
+#[get("/ledger/currencies")]
 async fn view_ledger_currencies(
     ledger: web::Data<Mutex<Ledger>>,
 ) -> Result<impl Responder, AWError> {
@@ -157,13 +165,13 @@ async fn view_ledger_currencies(
     Ok(web::Json(currencies_view))
 }
 
-#[get("/api/ledger/entities")]
+#[get("/ledger/entities")]
 async fn view_ledger_entities(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
     let entities_view = ledger.lock().unwrap().entities();
     Ok(web::Json(entities_view))
 }
 
-#[get("/api/ledger/transactions")]
+#[get("/ledger/transactions")]
 async fn view_ledger_transactions(
     ledger: web::Data<Mutex<Ledger>>,
 ) -> Result<impl Responder, AWError> {

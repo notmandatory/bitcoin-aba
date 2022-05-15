@@ -10,7 +10,7 @@ enum Msg {
 
 struct Model {
     value: i64,
-    //currencies: Vec<Currency>
+    currencies: String,
 }
 
 impl Component for Model {
@@ -18,7 +18,7 @@ impl Component for Model {
     type Properties = ();
 
     fn create(_ctx: &Context<Self>) -> Self {
-        Self { value: 0 }
+        Self { value: i64::default(), currencies: String::default() }
     }
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
@@ -53,8 +53,9 @@ impl Component for Model {
         let link = ctx.link();
         html! {
             <div>
-                <button onclick={link.callback(|_| Msg::AddOne)}>{ "+1" }</button>
                 <p>{ self.value }</p>
+                <button onclick={link.callback(|_| Msg::AddOne)}>{ "+1" }</button>
+                <p>{ self.currencies.as_str() }</p>
             </div>
         }
     }
