@@ -1,9 +1,9 @@
-#[cfg(feature = "server")]
-use static_files::resource_dir;
-
 fn main() -> std::io::Result<()> {
-    #[cfg(feature = "server")]
-    resource_dir("./web/dist").build()?;
-
+    #[cfg(feature = "web-files")]
+    {
+        use static_files::resource_dir;
+        let web_dist_path = "./web/dist";
+        resource_dir(web_dist_path).build()?;
+    }
     Ok(())
 }

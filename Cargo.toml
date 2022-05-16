@@ -16,7 +16,9 @@ rusty_ulid = { version = "0.11", features = ["serde"] }
 rust_decimal = "1.19"
 rust_decimal_macros = "1.19"
 time = {version = "0.3", features = ["serde-human-readable", "macros"] }
-bdk = { version = "0.18.0", default-features = false }
+
+# can't build on m1 macos for wasm
+bdk = { version = "0.18.0", default-features = false, optional = true }
 
 # server bin
 actix-web = { version = "4.0", optional = true }
@@ -35,7 +37,9 @@ static-files = "0.2.1"
 
 [features]
 default = ["server"]
-server = ["actix-web", "actix-web-static-files", "static-files", "env_logger", "failure", "futures", "num_cpus", "r2d2", "r2d2_sqlite", "rusqlite"]
+server = ["actix-web", "env_logger", "failure", "futures", "num_cpus", "r2d2", "r2d2_sqlite", "rusqlite", "bdk" ]
+# package static web files with server bin, must build web/dist directory first
+web-files = [ "actix-web-static-files", "static-files" ]
 
 [[bin]]
 name = "aba_server"

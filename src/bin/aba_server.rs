@@ -7,13 +7,15 @@ use actix_web::{
     get, middleware, post, web, App, Error as AWError, HttpResponse, HttpServer, Responder,
     ResponseError,
 };
-use actix_web_static_files::ResourceFiles;
 
 use aba::journal::{test_entries, Journal, JournalEntry};
 use aba::ledger::Ledger;
 use aba::rusty_ulid;
 
 use aba::journal::sqlite::SqliteDb;
+
+#[cfg(feature = "web-files")]
+use actix_web_static_files::ResourceFiles;
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -46,6 +48,7 @@ impl From<aba::ledger::Error> for Error {
 
 impl ResponseError for Error {}
 
+#[cfg(feature = "web-files")]
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
 #[actix_web::main]
@@ -68,24 +71,24 @@ async fn main() -> io::Result<()> {
 
     // Start http server
     HttpServer::new(move || {
-        let generated = generate();
-        App::new()
-            .service(
-                web::scope("/api")
-                    // store journal db as Data object
-                    .app_data(journal_data_mutex.clone())
-                    .app_data(ledger_data_mutex.clone())
-                    .wrap(middleware::Logger::default())
-                    .service(generate_ulid)
-                    .service(load_test_journal_entries)
-                    .service(add_journal_entry)
-                    .service(view_journal_entries)
-                    .service(view_ledger_accounts)
-                    .service(view_ledger_currencies)
-                    .service(view_ledger_entities)
-                    .service(view_ledger_transactions),
-            )
-            .service(ResourceFiles::new("/", generated))
+        let app = App::new().service(
+            web::scope("/api")
+                // store journal db as Data object
+                .app_data(journal_data_mutex.clone())
+                .app_data(ledger_data_mutex.clone())
+                .wrap(middleware::Logger::default())
+                .service(generate_ulid)
+                .service(load_test_journal_entries)
+                .service(add_journal_entry)
+                .service(view_journal_entries)
+                .service(view_ledger_accounts)
+                .service(view_ledger_currencies)
+                .service(view_ledger_entities)
+                .service(view_ledger_transactions),
+        );
+        #[cfg(feature = "web-files")]
+        let app = app.service(ResourceFiles::new("/", generate()));
+        app
     })
     .bind("127.0.0.1:8081")?
     .run()

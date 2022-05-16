@@ -18,7 +18,10 @@ impl Component for Model {
     type Properties = ();
 
     fn create(_ctx: &Context<Self>) -> Self {
-        Self { value: i64::default(), currencies: String::default() }
+        Self {
+            value: i64::default(),
+            currencies: String::default(),
+        }
     }
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
