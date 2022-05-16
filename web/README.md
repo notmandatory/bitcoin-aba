@@ -24,6 +24,7 @@ Before building backend server build wasm frontend:
 pushd web
 trunk build --release
 popd
+cargo clean
 ```
 
 Run backend server with frontend included:

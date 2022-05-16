@@ -55,10 +55,12 @@ impl Component for Model {
         // This gives us a component's "`Scope`" which allows us to send messages, etc to the component.
         let link = ctx.link();
         html! {
-            <div>
-                <p>{ self.value }</p>
-                <button onclick={link.callback(|_| Msg::AddOne)}>{ "+1" }</button>
-                <p>{ self.currencies.as_str() }</p>
+            <div class="container">
+                <div class="block">
+                    <p>{ self.value }</p>
+                    <button class="button is-primary" onclick={link.callback(|_| Msg::AddOne)}>{ "+1" }</button>
+                    <p>{ self.currencies.as_str() }</p>
+                </div>
             </div>
         }
     }
