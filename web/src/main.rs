@@ -1,11 +1,11 @@
 use aba::journal::Currency;
 use log::info;
 use reqwasm::http::Request;
-use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
 enum Msg {
     AddOne,
+    Currencies(Vec<Currency>),
 }
 
 struct Model {
@@ -24,28 +24,32 @@ impl Component for Model {
         }
     }
 
-    fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
+    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::AddOne => {
                 self.value += 1;
                 // the value has changed so we need to
                 // re-render for it to appear on the page
-                let resp = spawn_local(async {
-                    // let resp = Request::get("/currencies").send().await.unwrap();
-                    // assert_eq!(resp.status(), 200);
-                    // let currencies = resp.body().unwrap();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        let fetched_currencies: Vec<Currency> =
-                            Request::get("/api/ledger/currencies")
-                                .send()
-                                .await
-                                .unwrap()
-                                .json()
-                                .await
-                                .unwrap();
-                        info!("currencies: {:?}", fetched_currencies);
-                    });
+                ctx.link().send_future(async {
+                    let fetched_currencies: Vec<Currency> = Request::get("/api/ledger/currencies")
+                        .send()
+                        .await
+                        .unwrap()
+                        .json()
+                        .await
+                        .unwrap();
+                    info!("currencies: {:?}", &fetched_currencies);
+                    Msg::Currencies(fetched_currencies)
                 });
+                true
+            }
+            Msg::Currencies(currencies) => {
+                self.currencies = currencies
+                    .iter()
+                    .cloned()
+                    .map(|c| c.code)
+                    .collect::<Vec<String>>()
+                    .join(" ");
                 true
             }
         }
