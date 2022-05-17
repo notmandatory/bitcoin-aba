@@ -1,6 +1,6 @@
-use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
+use crate::journal::Action::{AddAccount, AddContact, AddCurrency, AddTransaction};
 use crate::journal::{
-    Account, AccountId, AccountNumber, AccountType, Currency, CurrencyId, Entity, EntityId,
+    Account, AccountId, AccountNumber, AccountType, Contact, ContactId, Currency, CurrencyId,
     JournalEntry, LedgerEntry, Transaction, TransactionId,
 };
 
@@ -15,7 +15,7 @@ pub mod report;
 pub enum Error {
     MissingAccount(AccountId),
     MissingCurrency(CurrencyId),
-    MissingEntity(EntityId),
+    MissingContact(ContactId),
     MissingTransaction(TransactionId),
 }
 
@@ -24,7 +24,7 @@ impl Display for Error {
         match self {
             Self::MissingAccount(a) => write!(f, "missing account: {}", a),
             Self::MissingCurrency(c) => write!(f, "missing currency: {}", c),
-            Self::MissingEntity(e) => write!(f, "missing entity: {}", e),
+            Self::MissingContact(e) => write!(f, "missing contact: {}", e),
             Self::MissingTransaction(t) => write!(f, "missing transaction: {}", t),
         }
     }
@@ -34,7 +34,7 @@ impl Display for Error {
 pub struct Ledger {
     account_map: BTreeMap<AccountId, Arc<Account>>,
     currency_map: BTreeMap<CurrencyId, Arc<Currency>>,
-    entity_map: BTreeMap<EntityId, Arc<Entity>>,
+    contact_map: BTreeMap<ContactId, Arc<Contact>>,
     transaction_map: BTreeMap<TransactionId, Arc<Transaction>>,
     transaction_entries_map: BTreeMap<TransactionId, Vec<Arc<LedgerEntry>>>,
     account_entries_map: BTreeMap<AccountId, Vec<Arc<LedgerEntry>>>,
@@ -44,7 +44,7 @@ impl Ledger {
     pub fn new() -> Ledger {
         let account_map: BTreeMap<AccountId, Arc<Account>> = BTreeMap::new();
         let currency_map: BTreeMap<CurrencyId, Arc<Currency>> = BTreeMap::new();
-        let entity_map: BTreeMap<EntityId, Arc<Entity>> = BTreeMap::new();
+        let contact_map: BTreeMap<ContactId, Arc<Contact>> = BTreeMap::new();
         let transaction_map: BTreeMap<TransactionId, Arc<Transaction>> = BTreeMap::new();
         let transaction_entries_map: BTreeMap<TransactionId, Vec<Arc<LedgerEntry>>> =
             BTreeMap::new();
@@ -52,7 +52,7 @@ impl Ledger {
         Ledger {
             account_map,
             currency_map,
-            entity_map,
+            contact_map,
             transaction_map,
             transaction_entries_map,
             account_entries_map,
@@ -73,9 +73,9 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn entity_exists(&self, entity_id: &EntityId) -> Result<(), Error> {
-        if !self.entity_map.contains_key(&entity_id) {
-            return Err(Error::MissingEntity(entity_id.clone()));
+    pub fn contact_exists(&self, contact_id: &ContactId) -> Result<(), Error> {
+        if !self.contact_map.contains_key(&contact_id) {
+            return Err(Error::MissingContact(contact_id.clone()));
         }
         Ok(())
     }
@@ -89,7 +89,7 @@ impl Ledger {
 
     pub fn account_type_valid(&self, account_type: &AccountType) -> Result<(), Error> {
         match account_type {
-            AccountType::EntityAccount { entity_id } => self.entity_exists(entity_id),
+            AccountType::ContactAccount { contact_id } => self.contact_exists(contact_id),
             AccountType::BankAccount { currency_id, .. } => self.currency_exists(currency_id),
             _ => Ok(()),
         }
@@ -129,16 +129,19 @@ impl Ledger {
             JournalEntry {
                 id: _,
                 version: _,
-                action: AddEntity { entity },
-            } => match self.entity_map.insert(entity.id, Arc::new(entity.clone())) {
+                action: AddContact { contact },
+            } => match self
+                .contact_map
+                .insert(contact.id, Arc::new(contact.clone()))
+            {
                 None => {
-                    //debug!("insert new entity: {}", serde_json::to_string(&entity)?);
+                    //debug!("insert new contact: {}", serde_json::to_string(&contact)?);
                 }
                 Some(_old) => {
                     // debug!(
-                    //     "replace entity old {} with new: {}",
+                    //     "replace contact old {} with new: {}",
                     //     serde_json::to_string(&old)?,
-                    //     serde_json::to_string(&entity)?
+                    //     serde_json::to_string(&contact)?
                     // );
                 }
             },
@@ -232,12 +235,12 @@ impl Ledger {
         self.currency_map.values().cloned().collect()
     }
 
-    pub fn get_entity(&self, id: &EntityId) -> Option<Arc<Entity>> {
-        self.entity_map.get(id).cloned()
+    pub fn get_contact(&self, id: &ContactId) -> Option<Arc<Contact>> {
+        self.contact_map.get(id).cloned()
     }
 
-    pub fn entities(&self) -> Vec<Arc<Entity>> {
-        self.entity_map.values().cloned().collect()
+    pub fn contacts(&self) -> Vec<Arc<Contact>> {
+        self.contact_map.values().cloned().collect()
     }
 
     pub fn get_transaction(&self, id: &TransactionId) -> Option<Arc<Transaction>> {
@@ -271,9 +274,9 @@ impl Ledger {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::journal::test_entries;
-    use crate::journal::Action::{AddAccount, AddEntity};
+    use crate::journal::Action::{AddAccount, AddContact};
     use crate::journal::{
-        Account, AccountType, Entity, EntityType, EntryType, JournalEntry, LedgerEntry,
+        Account, AccountType, Contact, ContactType, EntryType, JournalEntry, LedgerEntry,
     };
     use crate::ledger::Ledger;
     use log::debug;
@@ -442,19 +445,19 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn test_add_entity_account() {
+    fn test_add_contact_account() {
         setup();
 
-        let test_entity = Entity {
+        let test_contact = Contact {
             id: Ulid::generate(),
-            entity_type: EntityType::Individual,
+            contact_type: ContactType::Individual,
             name: "Tester".to_string(),
             address: None,
         };
 
         let test_account = Account {
             id: Ulid::generate(),
-            parent_id: Some(test_entity.id.clone()),
+            parent_id: Some(test_contact.id.clone()),
             number: 10,
             description: "Valid".to_string(),
             account_type: AccountType::LedgerAccount,
@@ -466,8 +469,8 @@ pub(crate) mod test {
         let result = ledger.add_journal_entry(JournalEntry {
             id: Ulid::generate(),
             version: 0,
-            action: AddEntity {
-                entity: test_entity.clone(),
+            action: AddContact {
+                contact: test_contact.clone(),
             },
         });
         assert!(result.is_ok());
@@ -491,8 +494,8 @@ pub(crate) mod test {
             parent_id: Some(Ulid::generate()),
             number: 10,
             description: "Invalid".to_string(),
-            account_type: AccountType::EntityAccount {
-                entity_id: Ulid::generate(),
+            account_type: AccountType::ContactAccount {
+                contact_id: Ulid::generate(),
             },
             statements: vec![],
         };

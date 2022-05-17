@@ -152,13 +152,13 @@ impl crate::journal::Db for SqliteDb {
             .map_err(Error::from)
             .map_err(|e| journal::Error::Db(e.to_string()))?;
 
-        let entity_rows = stmt
+        let contact_rows = stmt
             .query_and_then(NO_PARAMS, SqliteDb::convert_row_entry)
             .map_err(Error::from)
             .map_err(|e| journal::Error::Db(e.to_string()))?;
 
         let mut result = Vec::new();
-        for entry in entity_rows {
+        for entry in contact_rows {
             //debug!("entry: {:?}", &entry?);
             result.push(entry.map_err(|e| journal::Error::Db(e.to_string()))?);
         }
@@ -169,13 +169,13 @@ impl crate::journal::Db for SqliteDb {
 #[cfg(test)]
 mod test {
     use crate::journal::sqlite::SqliteDb;
-    use crate::journal::{Account, AccountType, Action, Db, Entity, EntityType, JournalEntry};
+    use crate::journal::{Account, AccountType, Action, Contact, ContactType, Db, JournalEntry};
 
     #[test]
     pub fn test_insert_select() {
         let mut db = SqliteDb::new_mem().unwrap();
 
-        let org = Entity::new(EntityType::Organization, "Test Org".to_string(), None);
+        let org = Contact::new(ContactType::Organization, "Test Org".to_string(), None);
         let account = Account::new(
             Some(org.id),
             100,

@@ -1,4 +1,4 @@
-use crate::journal::Action::{AddAccount, AddCurrency, AddEntity, AddTransaction};
+use crate::journal::Action::{AddAccount, AddContact, AddCurrency, AddTransaction};
 use crate::journal::CurrencyCode::{BTC, USD};
 use crate::journal::FinancialStatement::{BalanceSheet, CashFlow, IncomeStatement};
 use rust_decimal::Decimal;
@@ -133,8 +133,8 @@ pub enum Action {
     AddCurrency {
         currency: Currency,
     },
-    AddEntity {
-        entity: Entity,
+    AddContact {
+        contact: Contact,
     },
     AddAccount {
         account: Account,
@@ -151,30 +151,30 @@ pub type AccountId = Ulid;
 /// Account number
 pub type AccountNumber = u32;
 
-/// Entity id
-pub type EntityId = Ulid;
+/// Contact id
+pub type ContactId = Ulid;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub enum EntityType {
+pub enum ContactType {
     Individual,
     Organization,
     OrganizationUnit,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub struct Entity {
-    pub id: EntityId,
-    pub entity_type: EntityType,
+pub struct Contact {
+    pub id: ContactId,
+    pub contact_type: ContactType,
     pub name: String,
     pub address: Option<String>,
 }
 
-impl Entity {
-    pub fn new(entity_type: EntityType, name: String, address: Option<String>) -> Self {
+impl Contact {
+    pub fn new(contact_type: ContactType, name: String, address: Option<String>) -> Self {
         let id = Ulid::generate();
-        Entity {
+        Contact {
             id,
-            entity_type,
+            contact_type,
             name,
             address,
         }
@@ -188,8 +188,8 @@ impl Entity {
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum AccountType {
     LedgerAccount,
-    EntityAccount {
-        entity_id: EntityId,
+    ContactAccount {
+        contact_id: ContactId,
     },
     BankAccount {
         currency_id: CurrencyId,
@@ -206,7 +206,7 @@ impl fmt::Display for AccountType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match *self {
             AccountType::LedgerAccount { .. } => "LedgerAccount",
-            AccountType::EntityAccount { .. } => "EntityAccount",
+            AccountType::ContactAccount { .. } => "ContactAccount",
             AccountType::BankAccount { .. } => "BankAccount",
             AccountType::BitcoinAccount { .. } => "BitcoinAccount",
         })
@@ -306,13 +306,13 @@ pub enum PaymentMethod {
         address: String,
     },
     Ach {
-        entity_id: EntityId,
+        contact_id: ContactId,
         currency_id: CurrencyId,
         routing: u32,
         account: u64,
     },
     Check {
-        entity_id: EntityId,
+        contact_id: ContactId,
         currency_id: CurrencyId,
     },
     Cash,
@@ -426,7 +426,7 @@ impl FromStr for FinancialStatement {
 // utility functions
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TestEntries {
-    pub entities: Vec<Entity>,
+    pub contacts: Vec<Contact>,
     pub currencies: Vec<Currency>,
     pub accounts: Vec<Account>,
     pub transactions: Vec<(Transaction, Vec<LedgerEntry>)>,
@@ -435,15 +435,15 @@ pub struct TestEntries {
 
 impl TestEntries {
     fn new(
-        entities: Vec<Entity>,
+        contacts: Vec<Contact>,
         currencies: Vec<Currency>,
         accounts: Vec<Account>,
         transactions: Vec<(Transaction, Vec<LedgerEntry>)>,
     ) -> Self {
         let mut journal_entries: Vec<JournalEntry> = Vec::new();
-        for entity in entities.clone() {
-            let action = AddEntity {
-                entity: entity.clone(),
+        for contact in contacts.clone() {
+            let action = AddContact {
+                contact: contact.clone(),
             };
             TestEntries::add_journal_entry(&mut journal_entries, action)
         }
@@ -467,7 +467,7 @@ impl TestEntries {
             TestEntries::add_journal_entry(&mut journal_entries, action)
         }
         TestEntries {
-            entities,
+            contacts,
             currencies,
             accounts,
             transactions,
@@ -486,12 +486,12 @@ impl TestEntries {
 }
 
 pub fn test_entries() -> TestEntries {
-    // Entity
-    let company = Entity::new(EntityType::Organization, "Test Company".to_string(), None);
-    let owner = Entity::new(EntityType::Individual, "Test Owner".to_string(), None);
-    let bank1 = Entity::new(EntityType::Organization, "Test Bank".to_string(), None);
+    // Contacts
+    let company = Contact::new(ContactType::Organization, "Test Company".to_string(), None);
+    let owner = Contact::new(ContactType::Individual, "Test Owner".to_string(), None);
+    let bank1 = Contact::new(ContactType::Organization, "Test Bank".to_string(), None);
 
-    let entities = vec![company.clone(), owner.clone(), bank1.clone()];
+    let contacts = vec![company.clone(), owner.clone(), bank1.clone()];
 
     // Currencies
     let usd = Currency {
@@ -516,8 +516,8 @@ pub fn test_entries() -> TestEntries {
         None,
         10,
         "Test Organization".to_string(),
-        AccountType::EntityAccount {
-            entity_id: company_id,
+        AccountType::ContactAccount {
+            contact_id: company_id,
         },
         vec![BalanceSheet, IncomeStatement, CashFlow],
     );
@@ -566,8 +566,8 @@ pub fn test_entries() -> TestEntries {
         Some(equity_acct.id),
         100,
         "Owner 1".to_string(),
-        AccountType::EntityAccount {
-            entity_id: owner.id,
+        AccountType::ContactAccount {
+            contact_id: owner.id,
         },
         vec![BalanceSheet],
     );
@@ -654,7 +654,7 @@ pub fn test_entries() -> TestEntries {
         "Consulting income".to_string(),
         TransactionType::Invoice {
             payment_method: PaymentMethod::Check {
-                entity_id: company_id,
+                contact_id: company_id,
                 currency_id: USD as u32,
             },
             payment_terms: PaymentTerms::ImmediatePayment,
@@ -692,14 +692,12 @@ pub fn test_entries() -> TestEntries {
         (income_tx.clone(), [income_debits, income_credits].concat()),
     ];
 
-    TestEntries::new(entities, currencies, accounts, transactions)
+    TestEntries::new(contacts, currencies, accounts, transactions)
 }
 
 #[cfg(test)]
 pub(crate) mod test {
     use crate::journal::{test_entries, Journal, JournalEntry, VecDb};
-    use crate::{Journal, SqliteDb};
-    use aba::journal::{test_entries, JournalEntry, VecDb};
 
     #[test]
     fn test_add_view() {

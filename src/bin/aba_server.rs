@@ -83,7 +83,7 @@ async fn main() -> io::Result<()> {
                 .service(view_journal_entries)
                 .service(view_ledger_accounts)
                 .service(view_ledger_currencies)
-                .service(view_ledger_entities)
+                .service(view_ledger_contacts)
                 .service(view_ledger_transactions),
         );
         #[cfg(feature = "web-files")]
@@ -168,10 +168,10 @@ async fn view_ledger_currencies(
     Ok(web::Json(currencies_view))
 }
 
-#[get("/ledger/entities")]
-async fn view_ledger_entities(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
-    let entities_view = ledger.lock().unwrap().entities();
-    Ok(web::Json(entities_view))
+#[get("/ledger/contacts")]
+async fn view_ledger_contacts(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
+    let contacts_view = ledger.lock().unwrap().contacts();
+    Ok(web::Json(contacts_view))
 }
 
 #[get("/ledger/transactions")]
