@@ -1,6 +1,4 @@
-use crate::journal::{
-    Account, AccountId, CurrencyAmount, CurrencyId, EntryType, FinancialStatement, LedgerEntry,
-};
+use crate::journal::{Account, AccountId, CurrencyAmount, CurrencyId, EntryType, LedgerEntry};
 use crate::ledger::Ledger;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -12,32 +10,21 @@ use time::OffsetDateTime;
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Report {
     pub date_time: OffsetDateTime,
-    pub financial_statement: FinancialStatement,
-    pub account: Arc<Account>,
+    pub account_ids: Vec<AccountId>,
     pub account_totals: Vec<AccountTotals>,
 }
 
 impl Report {
-    pub fn new(
-        ledger: &Ledger,
-        date_time: OffsetDateTime,
-        statement: FinancialStatement,
-        account_id: AccountId,
-    ) -> Self {
-        // TODO verify account
-        let account = ledger.get_account(&account_id).unwrap();
-        let account_totals = ledger
-            .child_ids(&account)
+    pub fn new(ledger: &Ledger, date_time: OffsetDateTime, account_ids: Vec<AccountId>) -> Self {
+        let accounts = account_ids
             .iter()
-            .flat_map(|child_id| ledger.get_account(child_id))
-            .filter(|account| account.statements.contains(&statement))
-            .map(|child_account| AccountTotals::new(ledger, child_account, &statement))
-            .collect();
+            .map(|id| ledger.get_account(&id).expect("account"));
+        let account_totals: Vec<AccountTotals> =
+            accounts.map(|a| AccountTotals::new(ledger, a)).collect();
 
         Report {
             date_time,
-            financial_statement: statement,
-            account,
+            account_ids,
             account_totals,
         }
     }
@@ -52,14 +39,13 @@ pub struct AccountTotals {
 }
 
 impl AccountTotals {
-    pub fn new(ledger: &Ledger, account: Arc<Account>, statement: &FinancialStatement) -> Self {
+    pub fn new(ledger: &Ledger, account: Arc<Account>) -> Self {
         let child_ids = ledger.child_ids(&account);
         let child_account_totals: Vec<AccountTotals> = child_ids
             .iter()
             .map(|account_id| ledger.get_account(account_id))
             .flatten()
-            .filter(|account| account.statements.contains(statement))
-            .map(|account| AccountTotals::new(&ledger, account, statement))
+            .map(|account| AccountTotals::new(&ledger, account))
             .collect();
         let child_totals: [BTreeMap<CurrencyId, Decimal>; 2] = child_account_totals.iter().fold(
             [BTreeMap::new(), BTreeMap::new()],
@@ -184,36 +170,42 @@ impl AccountTotals {
 
 #[cfg(test)]
 mod test {
-    use crate::journal::FinancialStatement;
-    use crate::journal::Journal;
-    use crate::journal::{test_entries, VecDb};
+    use crate::journal::test_entries;
+    use crate::journal::AccountCategory::{BalanceSheet, IncomeStatement};
+    use crate::journal::BalanceSheetCategory::{Asset, Equity, Liability};
+    use crate::journal::IncomeStatementCategory::{OperatingExpense, OperatingRevenue};
     use crate::ledger::report::Report;
     use crate::ledger::test::setup;
-    use crate::ledger::Ledger;
+    use crate::ledger::OrganizationLedgers;
     use rust_decimal::Decimal;
     use time::OffsetDateTime;
 
     #[test]
     fn test_balance_sheet() {
         setup();
-        let db = VecDb::new();
-        let journal = Journal::new(db).expect("journal");
         let test_entries = test_entries();
-        for entry in &test_entries.journal_entries {
-            journal.add(entry.clone()).unwrap();
-        }
+        let organization_id = test_entries.organization.id;
+        let organization_ledgers = &mut OrganizationLedgers::new();
+        organization_ledgers
+            .add_journal_entries(test_entries.journal_entries)
+            .expect("load journal");
+        let ledger = organization_ledgers
+            .get_ledger(&organization_id)
+            .expect("ledger");
 
-        let mut ledger = Ledger::new();
-        ledger
-            .add_journal_entries(journal.view().unwrap())
-            .expect("loaded journal");
-
-        let account_id = test_entries.accounts.get(0).expect("first account").id;
+        let asset_account_id = ledger
+            .get_root_account(BalanceSheet(Asset))
+            .expect("Asset account");
+        let liability_account_id = ledger
+            .get_root_account(BalanceSheet(Liability))
+            .expect("Liability account");
+        let equity_account_id = ledger
+            .get_root_account(BalanceSheet(Equity))
+            .expect("Equity account");
         let report = Report::new(
             &ledger,
             OffsetDateTime::now_utc(),
-            FinancialStatement::BalanceSheet,
-            account_id,
+            vec![asset_account_id, liability_account_id, equity_account_id],
         );
 
         let account0_debits0_amount = report
@@ -248,24 +240,27 @@ mod test {
     #[test]
     fn test_income_statement() {
         setup();
-        let db = VecDb::new();
-        let journal = Journal::new(db).expect("journal");
         let test_entries = test_entries();
-        for entry in &test_entries.journal_entries {
-            journal.add(entry.clone()).unwrap();
-        }
+        let organization_id = test_entries.organization.id;
+        let organization_ledgers = &mut OrganizationLedgers::new();
+        organization_ledgers
+            .add_journal_entries(test_entries.journal_entries)
+            .expect("load journal");
+        let ledger = organization_ledgers
+            .get_ledger(&organization_id)
+            .expect("ledger");
 
-        let mut ledger = Ledger::new();
-        ledger
-            .add_journal_entries(journal.view().unwrap())
-            .expect("loaded journal");
+        let revenue_account_id = ledger
+            .get_root_account(IncomeStatement(OperatingRevenue))
+            .expect("Revenue account");
+        let expense_account_id = ledger
+            .get_root_account(IncomeStatement(OperatingExpense))
+            .expect("Expense account");
 
-        let account_id = test_entries.accounts.get(0).expect("first account").id;
         let report = Report::new(
             &ledger,
             OffsetDateTime::now_utc(),
-            FinancialStatement::IncomeStatement,
-            account_id,
+            vec![revenue_account_id, expense_account_id],
         );
 
         let account0_credits0_amount = report

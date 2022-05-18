@@ -8,8 +8,8 @@ use actix_web::{
     ResponseError,
 };
 
-use aba::journal::{test_entries, Journal, JournalEntry};
-use aba::ledger::Ledger;
+use aba::journal::{test_entries, Journal, JournalEntry, OrganizationId};
+use aba::ledger::OrganizationLedgers;
 use aba::rusty_ulid;
 
 use aba::journal::sqlite::SqliteDb;
@@ -58,16 +58,16 @@ async fn main() -> io::Result<()> {
     // access logs are printed with the INFO level so ensure it is enabled by default
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
     let db = SqliteDb::new().unwrap();
-    let journal = Journal::new(db).expect("new journal");
-    let mut ledger = Ledger::new();
+    let journal = Journal::new(db);
+    let mut organization_ledgers = OrganizationLedgers::new();
     let journal_entries = journal.view().expect("journal entries");
-    ledger
+    organization_ledgers
         .add_journal_entries(journal_entries)
         .expect("ledger loaded");
     //ledger.load_journal(&journal).expect("loaded journal");
 
     let journal_data_mutex = web::Data::new(Mutex::new(journal));
-    let ledger_data_mutex = web::Data::new(Mutex::new(ledger));
+    let organization_ledgers_data_mutex = web::Data::new(Mutex::new(organization_ledgers));
 
     // Start http server
     HttpServer::new(move || {
@@ -75,7 +75,7 @@ async fn main() -> io::Result<()> {
             web::scope("/api")
                 // store journal db as Data object
                 .app_data(journal_data_mutex.clone())
-                .app_data(ledger_data_mutex.clone())
+                .app_data(organization_ledgers_data_mutex.clone())
                 .wrap(middleware::Logger::default())
                 .service(generate_ulid)
                 .service(load_test_journal_entries)
@@ -96,7 +96,7 @@ async fn main() -> io::Result<()> {
 }
 
 /// Generate a new ulid
-#[get("/api/ulid")]
+#[get("/ulid")]
 pub(crate) async fn generate_ulid() -> Result<HttpResponse, AWError> {
     let ulid = rusty_ulid::generate_ulid_string();
     Ok(HttpResponse::Ok().body(ulid))
@@ -106,11 +106,11 @@ pub(crate) async fn generate_ulid() -> Result<HttpResponse, AWError> {
 #[post("/journal/test")]
 async fn load_test_journal_entries(
     journal: web::Data<Mutex<Journal<SqliteDb>>>,
-    ledger: web::Data<Mutex<Ledger>>,
+    organization_ledgers: web::Data<Mutex<OrganizationLedgers>>,
 ) -> Result<impl Responder, AWError> {
     debug!("add test entries to ledger");
     let test_entries = test_entries();
-    ledger
+    organization_ledgers
         .lock()
         .unwrap()
         .add_journal_entries(test_entries.journal_entries.clone())
@@ -126,11 +126,11 @@ async fn load_test_journal_entries(
 #[post("/journal")]
 async fn add_journal_entry(
     journal: web::Data<Mutex<Journal<SqliteDb>>>,
-    ledger: web::Data<Mutex<Ledger>>,
+    organization_ledgers: web::Data<Mutex<OrganizationLedgers>>,
     entry: web::Json<JournalEntry>,
 ) -> Result<impl Responder, AWError> {
     debug!("update ledger");
-    ledger
+    organization_ledgers
         .lock()
         .unwrap()
         .add_journal_entry(entry.0.clone())
@@ -154,30 +154,58 @@ async fn view_journal_entries(
     Ok(web::Json(journal_view))
 }
 
-#[get("/ledger/accounts")]
-async fn view_ledger_accounts(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
-    let accounts_view = ledger.lock().unwrap().accounts();
+#[get("/ledger/{organization}/accounts")]
+async fn view_ledger_accounts(
+    organization_ledgers: web::Data<Mutex<OrganizationLedgers>>,
+    organization_id: web::Path<OrganizationId>,
+) -> Result<impl Responder, AWError> {
+    let accounts_view = organization_ledgers
+        .lock()
+        .unwrap()
+        .get_ledger(&organization_id.into_inner())
+        .map_err(|e| Error::Ledger(e))?
+        .accounts();
     Ok(web::Json(accounts_view))
 }
 
-#[get("/ledger/currencies")]
+#[get("/ledger/{organization}/currencies")]
 async fn view_ledger_currencies(
-    ledger: web::Data<Mutex<Ledger>>,
+    organization_ledgers: web::Data<Mutex<OrganizationLedgers>>,
+    organization_id: web::Path<OrganizationId>,
 ) -> Result<impl Responder, AWError> {
-    let currencies_view = ledger.lock().unwrap().currencies();
+    let currencies_view = organization_ledgers
+        .lock()
+        .unwrap()
+        .get_ledger(&organization_id.into_inner())
+        .map_err(|e| Error::Ledger(e))?
+        .currencies();
     Ok(web::Json(currencies_view))
 }
 
-#[get("/ledger/contacts")]
-async fn view_ledger_contacts(ledger: web::Data<Mutex<Ledger>>) -> Result<impl Responder, AWError> {
-    let contacts_view = ledger.lock().unwrap().contacts();
+#[get("/ledger/{organization}/contacts")]
+async fn view_ledger_contacts(
+    organization_ledgers: web::Data<Mutex<OrganizationLedgers>>,
+    organization_id: web::Path<OrganizationId>,
+) -> Result<impl Responder, AWError> {
+    let contacts_view = organization_ledgers
+        .lock()
+        .unwrap()
+        .get_ledger(&organization_id.into_inner())
+        .map_err(|e| Error::Ledger(e))?
+        .contacts();
     Ok(web::Json(contacts_view))
 }
 
-#[get("/ledger/transactions")]
+#[get("/ledger/{organization}/transactions")]
 async fn view_ledger_transactions(
-    ledger: web::Data<Mutex<Ledger>>,
+    organization_ledgers: web::Data<Mutex<OrganizationLedgers>>,
+    organization_id: web::Path<OrganizationId>,
 ) -> Result<impl Responder, AWError> {
-    let transactions_view = ledger.lock().unwrap().transactions();
+    let transactions_view = organization_ledgers
+        .lock()
+        .unwrap()
+        .get_ledger(&organization_id.into_inner())
+        .map_err(|e| Error::Ledger(e))?
+        .transactions();
     Ok(web::Json(transactions_view))
 }
